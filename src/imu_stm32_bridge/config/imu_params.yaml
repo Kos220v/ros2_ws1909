@@ -1,4 +1,4 @@
-imu_stm32_bridge:
+/**/imu_stm32_bridge:
   ros__parameters:
     port: /dev/imu_stm32
     baud: 115200

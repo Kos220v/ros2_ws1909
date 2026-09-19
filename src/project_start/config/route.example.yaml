@@ -1,0 +1,13 @@
+# NOT a real route. Replace coordinates with surveyed safe points near your robot.
+# Adjacent points AND distance from start to first point must be <= 15 m.
+enabled: false
+waypoints:
+  - latitude: 55.750000
+    longitude: 37.610000
+    altitude: 0.0
+  - latitude: 55.750050
+    longitude: 37.610000
+    altitude: 0.0
+  - latitude: 55.750100
+    longitude: 37.610050
+    altitude: 0.0

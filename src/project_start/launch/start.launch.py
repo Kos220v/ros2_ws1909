@@ -17,8 +17,7 @@ ROS 2 Jazzy).
     elrs_receiver        пульт ELRS       -> /cmd_vel/manual, /control_mode
     kolesa_control       2×VESC (FS75100) <- /cmd_vel, -> /odom/vesc (скорость)
     imu_stm32_bridge     STM32 IMU        -> /imu/data (кватернион ENU, гироскоп)
-    robot_odom           /odom/vesc + /imu/data -> /odom
-                         (путь — VESC, курс — IMU; колёсный yaw НЕ используется)
+    Локализация запускается отдельно: localization.launch.py (два EKF).
     nmea_navsat_driver   GNSS             -> /gps/fix
     robot_state_publisher  URDF           -> статические TF base_link -> датчики
     cmd_switcher         приоритеты       -> /cmd_vel
@@ -30,9 +29,6 @@ ROS 2 Jazzy).
                   успеть откалибровать гироскоп стоя)
     use_gps       запускать драйвер GNSS (false — стенд/помещение)
     gps_port, imu_port, lidar_port   переопределение устройств
-    odom_publish_tf   true — robot_odom сам публикует TF odom->base_link
-                      (ТОЛЬКО без robot_localization, т.е. без localization.launch.py)
-    odom_yaw_mode     absolute (ENU, нужно для GPS) | relative (ноль при старте)
 """
 
 import os
@@ -57,7 +53,6 @@ def _first_existing(*paths):
 def launch_setup(context, *args, **kwargs):
     project_start_share = get_package_share_directory('project_start')
     imu_share = get_package_share_directory('imu_stm32_bridge')
-    odom_share = get_package_share_directory('robot_odom')
 
     # ---------------------------------------------------------------- порты
     # Жёстко зафиксированные UART на Raspberry Pi 5 (см. config.txt / оверлеи)
@@ -195,27 +190,6 @@ def launch_setup(context, *args, **kwargs):
         ],
     )
 
-    # ---------------------------------------------- одометрия VESC + IMU -> /odom
-    odom_params = os.path.join(odom_share, 'config', 'odom_params.yaml')
-    odom_node = Node(
-        package='robot_odom',
-        executable='odom_node',
-        name='robot_odom',
-        output='screen',
-        respawn=True,
-        respawn_delay=2.0,
-        parameters=[odom_params, {
-            'vesc_odom_topic': '/odom/vesc',
-            'imu_topic': '/imu/data',
-            'odom_topic': '/odom',
-            'publish_tf': ParameterValue(
-                LaunchConfiguration('odom_publish_tf'), value_type=bool),
-            'yaw_mode': LaunchConfiguration('odom_yaw_mode'),
-            'yaw_offset_deg': ParameterValue(
-                LaunchConfiguration('imu_yaw_offset_deg'), value_type=float),
-        }],
-    )
-
     # ------------------------------------------------------------- TF из URDF
     urdf_file = os.path.join(
         get_package_share_directory('tracked_robot_description'),
@@ -278,7 +252,6 @@ def launch_setup(context, *args, **kwargs):
         elrs_node,
         imu_node,
         kolesa_control_node,
-        odom_node,
         *gps_nodes,
         robot_state_publisher_node,
         cmd_mux_node,
@@ -300,14 +273,7 @@ def generate_launch_description():
                               description='Порт IMU STM32 (по умолчанию /dev/ttyAMA1)'),
         DeclareLaunchArgument('lidar_port', default_value='/dev/ttyUSB0',
                               description='Порт лидара (USB, по умолчанию /dev/ttyUSB0)'),
-        DeclareLaunchArgument('declination_deg', default_value='11.9',
+        DeclareLaunchArgument('declination_deg', default_value='0.0',
                               description='Магнитное склонение, град (+ восточное)'),
-        DeclareLaunchArgument('imu_yaw_offset_deg', default_value='-48.0',
-                              description='Поправка угла монтажа IMU, град'),
-        DeclareLaunchArgument('odom_publish_tf', default_value='false',
-                              description='robot_odom публикует TF odom->base_link '
-                                          '(true только БЕЗ robot_localization)'),
-        DeclareLaunchArgument('odom_yaw_mode', default_value='absolute',
-                              description='absolute (ENU) | relative (ноль при старте)'),
         OpaqueFunction(function=launch_setup),
     ])

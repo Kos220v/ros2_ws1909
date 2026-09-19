@@ -16,7 +16,7 @@ ROS 2 нода дифференциального управления гусе�
 - `/odom/vesc` (`nav_msgs/Odometry`) — **только** `twist.linear.x`: скорость
   центра робота по тахометрам VESC. Позу и угловую скорость узел не
   вычисляет (ковариация 1e6). Курс даёт IMU (`imu_stm32_bridge`), а
-  интегрирует путь узел `robot_odom` → `/odom`. Разность бортов для угла
+  интегрирует путь узел `robot_localization` → `/odometry/local`. Разность бортов для угла
   поворота не используется нигде: гусеницы в повороте буксуют.
 - `/joint_states` (`sensor_msgs/JointState`) — положение и скорость гусениц.
 - `/kolesa/diagnostics` (`diagnostic_msgs/DiagnosticArray`) — напряжение, токи,

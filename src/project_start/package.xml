@@ -3,16 +3,17 @@
 <package format="3">
   <name>project_start</name>
   <version>0.1.0</version>
-  <description>Слой железа гусеничного робота: launch-файлы и параметры драйверов.</description>
+  <description>Hardware bringup, GNSS localization and guarded Nav2 route execution.</description>
   <maintainer email="admin@example.com">admin</maintainer>
   <license>Apache License 2.0</license>
 
+  <buildtool_depend>ament_python</buildtool_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>xacro</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>kolesa_control</exec_depend>
-  <exec_depend>robot_odom</exec_depend>
+
   <exec_depend>imu_stm32_bridge</exec_depend>
   <exec_depend>elrs_receiver</exec_depend>
   <exec_depend>cmd_switcher</exec_depend>
@@ -20,6 +21,31 @@
   <exec_depend>tracked_robot_description</exec_depend>
   <exec_depend>ydlidar_ros2_driver</exec_depend>
   <exec_depend>nmea_navsat_driver</exec_depend>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>geographic_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_behaviors</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_velocity_smoother</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>nav2_navfn_planner</exec_depend>
+  <exec_depend>dwb_core</exec_depend>
+  <exec_depend>dwb_critics</exec_depend>
+
+  <exec_depend>nav2_collision_monitor</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

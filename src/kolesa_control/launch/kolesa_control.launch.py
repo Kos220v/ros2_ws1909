@@ -49,7 +49,7 @@ def generate_launch_description():
                 "cmd_timeout": 0.5,
 
                 # Публикации
-                "publish_odom": True,          # /odom/vesc — скорость для robot_odom
+                "publish_odom": True,          # /odom/vesc — скорость для robot_localization
                 "odom_topic": "odom/vesc",
                 "publish_joint_states": True,
                 "publish_diagnostics": True,

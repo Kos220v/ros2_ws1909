@@ -12,7 +12,7 @@ FS75100 / VESC по UART.
 линейную скорость каждой гусеницы по абсолютному тахометру. Угол поворота
 (yaw) здесь НЕ вычисляется — гусеничная машина в повороте проскальзывает,
 и разность тиков бортов не имеет отношения к реальному курсу. Курс берётся
-с инерциального модуля (imu_stm32_bridge) узлом robot_odom, который
+с инерциального модуля (imu_stm32_bridge) узлом robot_localization, который
 объединяет дистанцию VESC и ориентацию IMU в /odom.
 
 Подписки:
@@ -184,7 +184,7 @@ class KolesaControl(Node):
             f"({self.distance_per_tacho_count * 1000.0:.5f} мм/тик)"
         )
         self.get_logger().info(
-            "  Курс (yaw) по гусеницам НЕ считается — его даёт IMU (robot_odom)."
+            "  Курс (yaw) по гусеницам НЕ считается — его даёт IMU (robot_localization)."
         )
         self.get_logger().info("=" * 60)
 
@@ -447,7 +447,7 @@ class KolesaControl(Node):
         /odom/vesc: ТОЛЬКО линейная скорость центра робота.
 
         Поза и угловая скорость не измеряются (ковариация 1e6). Курс даёт
-        IMU, интеграцию в X/Y выполняет robot_odom.
+        IMU, интеграцию в X/Y выполняет robot_localization.
         """
         left = self.wheels["left"]
         right = self.wheels["right"]
