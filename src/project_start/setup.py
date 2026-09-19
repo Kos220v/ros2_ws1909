@@ -26,6 +26,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'counter_odometry = project_start.counter_odometry:main',
             'gps_route = project_start.gps_route:main',
             'navigation_guard = project_start.navigation_guard:main',
         ],

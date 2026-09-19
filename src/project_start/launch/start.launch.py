@@ -7,7 +7,7 @@ ROS 2 Jazzy).
 
 Распределение UART:
     uart0  /dev/ttyAMA0  — приёмник ELRS (пульт)
-    uart1  /dev/ttyAMA1  — IMU STM32
+    I2C1  /dev/i2c-1    — BNO086 Qwiic (0x4B), GPIO2/GPIO3
     uart2  /dev/ttyAMA2  — GPS (NMEA)
     uart3  /dev/ttyAMA3  — VESC левый  (kolesa_control)
     uart4  /dev/ttyAMA4  — VESC правый (kolesa_control)
@@ -16,8 +16,8 @@ ROS 2 Jazzy).
 Запускает:
     elrs_receiver        пульт ELRS       -> /cmd_vel/manual, /control_mode
     kolesa_control       2×VESC (FS75100) <- /cmd_vel, -> /odom/vesc (скорость)
-    imu_stm32_bridge     STM32 IMU        -> /imu/data (кватернион ENU, гироскоп)
-    Локализация запускается отдельно: localization.launch.py (два EKF).
+    bno086_imu           BNO086 I2C        -> /imu/data (кватернион ENU, гироскоп)
+    Локализация запускается отдельно: localization.launch.py (counter_odometry + GPS EKF).
     nmea_navsat_driver   GNSS             -> /gps/fix
     robot_state_publisher  URDF           -> статические TF base_link -> датчики
     cmd_switcher         приоритеты       -> /cmd_vel
@@ -28,7 +28,7 @@ ROS 2 Jazzy).
     lidar_delay   задержка старта лидара, с (мотор вибрирует, IMU должна
                   успеть откалибровать гироскоп стоя)
     use_gps       запускать драйвер GNSS (false — стенд/помещение)
-    gps_port, imu_port, lidar_port   переопределение устройств
+    gps_port, lidar_port, imu_i2c_bus, imu_i2c_address   переопределение устройств
 """
 
 import os
@@ -52,12 +52,11 @@ def _first_existing(*paths):
 
 def launch_setup(context, *args, **kwargs):
     project_start_share = get_package_share_directory('project_start')
-    imu_share = get_package_share_directory('imu_stm32_bridge')
+    imu_share = get_package_share_directory('bno086_imu')
 
     # ---------------------------------------------------------------- порты
     # Жёстко зафиксированные UART на Raspberry Pi 5 (см. config.txt / оверлеи)
     ELRS_PORT  = '/dev/ttyAMA0'   # uart0
-    IMU_PORT   = '/dev/ttyAMA1'   # uart1
     GPS_PORT   = '/dev/ttyAMA2'   # uart2
     VESC_LEFT  = '/dev/ttyAMA3'   # uart3
     VESC_RIGHT = '/dev/ttyAMA4'   # uart4
@@ -69,8 +68,6 @@ def launch_setup(context, *args, **kwargs):
         _first_existing(LIDAR_PORT, '/dev/ttyUSB1')
     gps_port = LaunchConfiguration('gps_port').perform(context) or \
         _first_existing(GPS_PORT)
-    imu_port = LaunchConfiguration('imu_port').perform(context) or \
-        _first_existing(IMU_PORT)
 
     use_gps = LaunchConfiguration('use_gps').perform(context).lower() in ('1', 'true', 'yes')
     lidar_delay = float(LaunchConfiguration('lidar_delay').perform(context))
@@ -78,9 +75,6 @@ def launch_setup(context, *args, **kwargs):
     if lidar_port is None:
         raise RuntimeError('Лидар не найден: нет /dev/ttyUSB0 '
                            '(задайте lidar_port:=...)')
-    if imu_port is None:
-        raise RuntimeError('IMU не найден: нет /dev/ttyAMA1 '
-                           '(задайте imu_port:=...)')
     if use_gps and gps_port is None:
         raise RuntimeError('GNSS не найден: нет /dev/ttyAMA2 '
                            '(задайте gps_port:=... или use_gps:=false)')
@@ -147,6 +141,8 @@ def launch_setup(context, *args, **kwargs):
             # Калибровка одометрии VESC (см. kolesa_control/README.md)
             'tacho_counts_per_revolution': 2157.0,
             'distance_per_revolution': 2.011,
+            'left_odometry_scale': 1.0,
+            'right_odometry_scale': 1.0,
             'odometry_scale': 1.15,   # замер: рулетка 14.12 м / одометрия 12.28 м
             'invert_left': False,
             'invert_right': True,
@@ -164,30 +160,16 @@ def launch_setup(context, *args, **kwargs):
         }],
     )
 
-    # ------------------------------------------------------- инерциальный модуль
-    imu_params = os.path.join(imu_share, 'config', 'imu_params.yaml')
+    # ------------------------------------------------------- BNO086 по I2C
+    imu_params = os.path.join(imu_share, 'config', 'imu.yaml')
     imu_node = Node(
-        package='imu_stm32_bridge',
-        executable='bridge_node',
-        name='imu_stm32_bridge',
-        namespace='imu',
-        output='screen',
-        respawn=True,
-        respawn_delay=3.0,
-        parameters=[
-            imu_params,
-            {
-                'port': imu_port,        # /dev/ttyAMA1
-                'baud': 115200,
-                'frame_id': 'imu_link',
-                'rate': 50,
-                # Магнитное склонение, градусы (+ восточное). Пересчитайте для
-                # своей местности: https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml
-                'declination': ParameterValue(
-                    LaunchConfiguration('declination_deg'), value_type=float),
-                'publish_mag': True,
-            },
-        ],
+        package='bno086_imu', executable='imu_node', name='bno086_imu',
+        namespace='imu', output='screen', respawn=True, respawn_delay=3.0,
+        parameters=[imu_params, {
+            'i2c_bus': ParameterValue(LaunchConfiguration('imu_i2c_bus'), value_type=int),
+            'i2c_address': ParameterValue(LaunchConfiguration('imu_i2c_address'), value_type=int),
+            'declination_deg': ParameterValue(LaunchConfiguration('declination_deg'), value_type=float),
+        }],
     )
 
     # ------------------------------------------------------------- TF из URDF
@@ -269,8 +251,10 @@ def generate_launch_description():
         DeclareLaunchArgument('gps_port', default_value='/dev/ttyAMA2',
                               description='Порт GNSS (по умолчанию /dev/ttyAMA2)'),
         DeclareLaunchArgument('gps_baud', default_value='115200'),
-        DeclareLaunchArgument('imu_port', default_value='/dev/ttyAMA1',
-                              description='Порт IMU STM32 (по умолчанию /dev/ttyAMA1)'),
+        DeclareLaunchArgument('imu_i2c_bus', default_value='1',
+                              description='Номер шины /dev/i2c-N для BNO086'),
+        DeclareLaunchArgument('imu_i2c_address', default_value='75',
+                              description='Адрес BNO086: 75=0x4B, 74=0x4A'),
         DeclareLaunchArgument('lidar_port', default_value='/dev/ttyUSB0',
                               description='Порт лидара (USB, по умолчанию /dev/ttyUSB0)'),
         DeclareLaunchArgument('declination_deg', default_value='0.0',

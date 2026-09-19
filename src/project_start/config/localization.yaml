@@ -1,55 +1,5 @@
-# ROS 2 Jazzy. Vector order documented in docs/GPS_NAVIGATION_RU.md
-ekf_local:
-  ros__parameters:
-    frequency: 30.0
-    sensor_timeout: 0.3
-    two_d_mode: true
-    publish_tf: true
-    print_diagnostics: true
-    map_frame: map
-    odom_frame: odom
-    base_link_frame: base_link
-    world_frame: odom
-    odom0: /odom/vesc
-    odom0_config:
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    - true
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    odom0_queue_size: 10
-    odom0_differential: false
-    imu0: /imu/data
-    imu0_config:
-    - false
-    - false
-    - false
-    - false
-    - false
-    - true
-    - false
-    - false
-    - false
-    - false
-    - false
-    - true
-    - false
-    - false
-    - false
-    imu0_queue_size: 20
-    imu0_differential: false
-    imu0_relative: false
-    imu0_remove_gravitational_acceleration: false
+# Local pose: hardware counter increments + BNO086, NOT a velocity-integrating EKF.
+# Global EKF: local vx + absolute IMU + GNSS; no local pose double fusion.
 ekf_global:
   ros__parameters:
     frequency: 30.0
@@ -61,7 +11,7 @@ ekf_global:
     odom_frame: odom
     base_link_frame: base_link
     world_frame: map
-    odom0: /odom/vesc
+    odom0: /odometry/local
     odom0_config:
     - false
     - false
@@ -133,3 +83,25 @@ navsat_transform:
     use_odometry_yaw: false
     wait_for_datum: false
     broadcast_utm_transform: false
+counter_odometry:
+  ros__parameters:
+    odom_frame: odom
+    base_frame: base_link
+    max_gap: 0.15
+    input_timeout: 0.25
+    min_update_interval: 0.02
+    max_track_speed: 2.0
+    max_yaw_rate: 2.0
+    yaw_jump_tolerance: 0.08
+    max_tilt: 0.35
+    track_width: 0.48
+    distance_stddev_per_meter: 0.03
+    distance_noise_floor: 0.001
+    lateral_stddev_per_meter: 0.03
+    lateral_stddev_per_radian: 0.02
+    slip_noise_gain: 0.3
+    heading_bias_stddev: 0.05
+    timestamp_stddev: 0.005
+    left_time_offset: 0.0
+    right_time_offset: 0.0
+    imu_time_offset: 0.0

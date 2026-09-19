@@ -14,7 +14,7 @@
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>kolesa_control</exec_depend>
 
-  <exec_depend>imu_stm32_bridge</exec_depend>
+  <exec_depend>bno086_imu</exec_depend>
   <exec_depend>elrs_receiver</exec_depend>
   <exec_depend>cmd_switcher</exec_depend>
   <exec_depend>relay_reliable</exec_depend>
@@ -24,11 +24,13 @@
 
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>tracked_robot_interfaces</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>geographic_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>action_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
@@ -46,6 +48,8 @@
 
   <exec_depend>nav2_collision_monitor</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

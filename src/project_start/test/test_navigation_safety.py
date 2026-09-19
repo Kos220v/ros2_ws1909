@@ -53,15 +53,21 @@ def test_legs():
 
 def test_localization_contract():
     params = yaml.safe_load((ROOT / 'config/localization.yaml').read_text())
-    local = params['ekf_local']['ros__parameters']
+    assert 'ekf_local' not in params  # no second odom->base_link publisher
+    launch = (ROOT / 'launch/localization.launch.py').read_text()
+    assert "name='ekf_local'" not in launch
+    assert "executable='counter_odometry'" in launch
+    assert (ROOT.parent / 'tracked_robot_interfaces/msg/TrackTicks.msg').exists()
+    local = params['counter_odometry']['ros__parameters']
     glob = params['ekf_global']['ros__parameters']
-    assert local['world_frame'] == 'odom'
+    assert local['odom_frame'] == 'odom'
+    assert local['input_timeout'] <= 0.4
     assert glob['world_frame'] == 'map'
-    for ekf in (local, glob):
-        assert len(ekf['odom0_config']) == len(ekf['imu0_config']) == 15
-        assert [i for i, v in enumerate(ekf['odom0_config']) if v] == [6]
-        assert [i for i, v in enumerate(ekf['imu0_config']) if v] == [5, 11]
-        assert ekf['imu0_relative'] is False
+    assert glob['odom0'] == '/odometry/local'
+    assert len(glob['odom0_config']) == len(glob['imu0_config']) == 15
+    assert [i for i, v in enumerate(glob['odom0_config']) if v] == [6]
+    assert [i for i, v in enumerate(glob['imu0_config']) if v] == [5, 11]
+    assert glob['imu0_relative'] is False
     assert [i for i, v in enumerate(glob['odom1_config']) if v] == [0, 1]
 
 

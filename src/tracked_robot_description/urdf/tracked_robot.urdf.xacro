@@ -4,7 +4,7 @@
 
   СИСТЕМА КООРДИНАТ (REP-103): X — вперёд, Y — влево, Z — вверх.
 
-  Фреймы датчиков: imu_link (плата STM32 с MPU6050+QMC5883L), gps_link
+  Фреймы датчиков: imu_link (плата BNO086 Qwiic), gps_link
   (антенна GNSS), laser_frame (лидар). robot_localization поворачивает данные
   IMU в base_link по TF base_link -> imu_link, поэтому rpy у imu_joint должен
   соответствовать реальной ориентации платы (X платы вперёд, Y влево, Z вверх
@@ -26,10 +26,10 @@
   <xacro:property name="gps_xyz"  value="0.10  -0.100 0.42" /> <!-- GPS-антенна -->
   <xacro:property name="laser_xyz" value="-0.21  0.16  0.55" />
 
-  <!-- ============ IMU (STM32: MPU6050 + QMC5883L) ============ -->
+  <!-- ============ IMU (SparkFun BNO086 Qwiic) ============ -->
   <link name="imu_link">
     <visual>
-      <geometry><box size="0.04 0.02 0.005"/></geometry>
+      <geometry><box size="0.0254 0.03048 0.005"/></geometry>
       <material name="black"/>
     </visual>
   </link>

@@ -3,7 +3,7 @@
 ## 1. Что реализовано и где границы применимости
 
 Целевая платформа из исходного проекта: Ubuntu 24.04 / ROS 2 **Jazzy**, Raspberry Pi 5,
-гусеничное дифференциальное шасси, два VESC, STM32 IMU, NMEA GNSS и 2D YDLIDAR.
+гусеничное дифференциальное шасси, два VESC, BNO086 Qwiic (I²C), NMEA GNSS и 2D YDLIDAR.
 Для другого дистрибутива параметры и названия плагинов нужно проверить заново.
 
 Робот получает **упорядоченный список GPS-точек WGS84**, преобразует их в `map`
@@ -39,12 +39,11 @@ Nav2 и оборудования: colcon-сборка, lifecycle, TF на жив
 ## 2. Архитектура и файлы
 
 ```text
-/odom/vesc (только vx) ─┬─> ekf_local ─────────> /odometry/local; TF odom→base_link
-/imu/data (yaw, wz) ───┤
-                      └─> ekf_global <─────── /odometry/gps
-                              │                    ↑
-                              ├─> /odometry/global │
-                              └─> TF map→odom      │
+/kolesa/track_left + /kolesa/track_right + /imu/data
+     └─> counter_odometry ─> /odometry/local; TF odom→base_link
+                    │             └─> /odometry/healthy (для navigation_guard)
+                    └─ vx ─> ekf_global <─ /imu/data + /odometry/gps
+                                  └─> /odometry/global; TF map→odom
 /gps/fix + /imu/data + /odometry/global ─> navsat_transform
                                               └─> /fromLL
 WGS84 YAML ─> gps_route ─> NavigateToPose ─> BT ─> planner + controller
@@ -69,8 +68,9 @@ controller_server / behavior_server
 | Файл | Назначение |
 |---|---|
 | `src/project_start/launch/start.launch.py` | Драйверы, URDF/TF датчиков, пульт, mux |
-| `src/project_start/launch/localization.launch.py` | Два EKF и navsat_transform |
+| `src/project_start/launch/localization.launch.py` | counter_odometry, глобальный EKF и navsat_transform |
 | `src/project_start/config/localization.yaml` | Настройка локализации |
+| `src/bno086_imu/config/imu.yaml` | I²C, частоты, качество BNO086 и склонение |
 | `src/project_start/launch/navigation.launch.py` | Nav2, lifecycle manager, защитный gate |
 | `src/project_start/config/nav2.yaml` | Параметры всех используемых компонентов Nav2 |
 | `src/project_start/behavior_trees/gps_navigation.xml` | Перепланирование и ограниченные recovery |
@@ -78,8 +78,9 @@ controller_server / behavior_server
 | `src/project_start/config/route.example.yaml` | Заблокированный образец маршрута |
 | `src/cmd_switcher/cmd_switcher/policy.py` | Проверяемые правила выбора источника команд |
 
-Ссылка на отсутствовавший `robot_odom` удалена. Его функцию выполняет стандартный
-`robot_localization`; отдельный интегратор одометрии не нужен. Старые аргументы
+Ссылка на отсутствовавший `robot_odom` удалена. Локальный EKF заменён узлом
+`counter_odometry`: X/Y считаются по приращениям аппаратных счётчиков и BNO086,
+а не повторным интегрированием скорости. Подробнее: [ODOMETRY_RU.md](ODOMETRY_RU.md). Старые аргументы
 `odom_publish_tf`, `odom_yaw_mode`, `imu_yaw_offset_deg` больше не используются.
 Старую индивидуальную поправку `-48°` нельзя автоматически переносить: физический
 монтаж задаётся URDF, ноль географического курса проверяется отдельно.
@@ -94,7 +95,7 @@ sudo apt update
 sudo apt install ros-jazzy-navigation2 ros-jazzy-nav2-bringup \
   ros-jazzy-robot-localization ros-jazzy-nmea-navsat-driver \
   ros-jazzy-xacro ros-jazzy-robot-state-publisher ros-jazzy-rviz2 \
-  python3-colcon-common-extensions python3-rosdep python3-yaml python3-serial python3-pytest
+  python3-colcon-common-extensions python3-rosdep python3-yaml python3-serial python3-smbus2 python3-numpy python3-pytest
 
 # sudo rosdep init     # только если rosdep ещё не инициализирован
 rosdep update
@@ -118,9 +119,11 @@ ls -l /dev/ttyAMA* /dev/ttyUSB*
 ```
 
 Не запускайте ROS через sudo. Для USB предпочтительны постоянные udev-имена.
-По умолчанию ELRS=/dev/ttyAMA0, IMU=AMA1, GNSS=AMA2, левый VESC=AMA3,
-правый VESC=AMA4, лидар=/dev/ttyUSB0. Порты ELRS/VESC заданы в start.launch.py;
-IMU/GPS/лидар можно переопределять launch-аргументами.
+По умолчанию ELRS=/dev/ttyAMA0, GNSS=AMA2, левый VESC=AMA3,
+правый VESC=AMA4, лидар=/dev/ttyUSB0. IMU: `/dev/i2c-1`, адрес 0x4B (75).
+Порты ELRS/VESC заданы в start.launch.py; GPS/лидар и номер шины/адрес IMU
+можно переопределять launch-аргументами. Настройка I²C и права группы i2c
+описаны в [инструкции BNO086](BNO086_RASPBERRY_PI5_RU.md).
 В каждом терминале загружайте оба `setup.bash`.
 
 ## 4. TF, IMU, одометрия и GNSS — настроить до Nav2
@@ -129,7 +132,7 @@ IMU/GPS/лидар можно переопределять launch-аргумен
 
 ```text
 map                         ekf_global (динамический)
- └─ odom                    ekf_local (динамический)
+ └─ odom                    counter_odometry (динамический)
      └─ base_link
          ├─ imu_link        robot_state_publisher, URDF
          ├─ gps_link        robot_state_publisher, URDF
@@ -157,63 +160,64 @@ TF антенны нужен для компенсации смещения GPS 
 - юг: yaw ≈ −π/2;
 - поворот влево: `angular_velocity.z > 0`.
 
-Мост пересылает quaternion STM32, **не переводит автоматически NED/компасный yaw в ENU**.
-Документ протокола заявляет ENU quaternion, но отдельное поле `yaw_deg` описано
-как угол с нулём на севере: для EKF используется quaternion, не это поле!
-Проверяйте его фактическую ориентацию по четырём направлениям. Если firmware
-выдаёт другую систему, исправляйте конверсию целиком; произвольная поправка
-только в navsat при несогласованном EKF не является правильным решением.
+Драйвер `bno086_imu` использует **Rotation Vector (0x05)** — fusion
+акселерометра, гироскопа и магнитометра. Game Rotation Vector не используется:
+он не даёт абсолютного курса для GPS. Вход SH-2 — quaternion `(i,j,k,real)`
+в магнитной ENU; выход `/imu/data` — `(x,y,z,w)` в истинной ENU.
+Проверить на реальной плате все четыре направления обязательно.
 
-Проведите калибровку магнитометра и гироскопа по `imu_stm32_bridge/docs/CALIBRATION.md`.
-Не используйте `zero_yaw` в GPS-режиме; снимите ранее сохранённое обнуление.
-Проверяйте курс с включёнными VESC и работающим лидаром, не только на столе.
-Магнитометр возле силовых проводов может быть непригоден для абсолютного курса;
-в таком случае нужен перенос датчика/другой AHRS или двухантенный GNSS heading.
+Восточное магнитное склонение `declination_deg` задаётся **только драйверу BNO086**.
+Для магнитного ENU-пространства реализовано `yaw_true = yaw_magnetic - D`:
+магнитный север при D=+10° имеет истинный ENU yaw +80°. Это вращение мировой
+системы, не физического монтажа. В `navsat_transform` оставить
+`magnetic_declination_radians: 0.0` и `yaw_offset: 0.0`: повторная поправка
+исказит маршрут. При замене старого датчика перезапустить counter_odometry, глобальный EKF и navsat.
 
-`declination_deg` в hardware launch передаётся STM32. Укажите склонение для
-места/даты, **в градусах**, восточное положительное. Значение по умолчанию теперь
-0.0, а не жёстко заданное московское; ноль — не универсальная калибровка.
-В `navsat_transform.magnetic_declination_radians` оставлено 0.0, чтобы не применить
-то же склонение дважды. `yaw_offset=0.0` предполагает уже корректный ENU-вход.
-`imu_rpy` описывает физический монтаж, а не подгонку траектории под GPS.
+Калибровка, параметры I²C, проверка осей и допустимость магнитного окружения
+описаны в [BNO086_RASPBERRY_PI5_RU.md](BNO086_RASPBERRY_PI5_RU.md).
+BNO086 не устраняет помехи VESC/стальных элементов: испытать курс с включёнными
+приводами и лидаром. При постоянном искажении поля нужна другая установка IMU
+или двухантенный GNSS heading. Не обнулять yaw относительно старта для GPS.
 
-Конфиг IMU использует `/**/imu_stm32_bridge`, чтобы применяться и к узлу в
-namespace `/imu`. Проверить загрузку: `ros2 param get /imu/imu_stm32_bridge orientation_stddev`.
+Проверка параметров: `ros2 param get /imu/bno086_imu min_accuracy`.
+Без свежих accel/gyro/Rotation Vector и достаточного статуса точности драйвер
+не публикует `/imu/data`, а существующий navigation guard блокирует AUTO.
+Ускорение включает гравитацию, но в текущих EKF оно **не включено в fusion**;
+используются только yaw и wz. Дополнительный AHRS/Madgwick поверх BNO086 не нужен.
 
-### 4.3. EKF
+### 4.3. Локальная одометрия и глобальный EKF
 
-Порядок 15 флагов `*_config` у robot_localization:
+Локальную `/odometry/local` и **единственный** TF `odom→base_link` публикует
+`counter_odometry`. На общей временной шкале интерполируются независимые счётчики
+левой/правой гусениц и yaw BNO086. Для каждого малого участка используются
+приращение пути и точная формула дуги. По RPM, заданной скорости, duty и ускорению
+положение не интегрируется. Старый `ekf_local` больше не запускается.
 
-```text
-x y z roll pitch yaw vx vy vz vroll vpitch vyaw ax ay az
-0 1 2  3    4    5   6  7  8   9    10     11  12 13 14
-```
+[Подробная математика, калибровка и отказы — ODOMETRY_RU.md](ODOMETRY_RU.md).
+Это плоская модель; боковое проскальзывание физически не наблюдается двумя
+тахометрами и одной IMU. Ковариация растёт при движении/повороте, при потере данных
+узел останавливает расчёт и переводит `/odometry/healthy` в false.
 
-| Параметр | Значение / причина |
-|---|---|
-| `frequency: 30.0` | Выход/TF 30 Гц; на RPi следить за CPU и задержками |
-| `sensor_timeout: 0.3` | После паузы EKF продолжает предсказание; **это не stop**, stop делает guard |
-| `two_d_mode: true` | Плоская модель: z/roll/pitch не участвуют в навигации |
-| `odom0: /odom/vesc` | Используется только `vx` (индекс 6) |
-| `imu0: /imu/data` | Используются абсолютный yaw (5) и скорость yaw (11) |
-| `imu0_relative/differential: false` | Не уничтожать абсолютный географический курс |
-| `world_frame: odom` у local | Публикует `odom→base_link` |
-| `world_frame: map` у global | Публикует `map→odom`, использует также GPS x/y |
-| `odom1: /odometry/gps` | Только x/y (0,1), не yaw и не скорость |
+Глобальный `ekf_global` сохраняет `world_frame: map`, `two_d_mode: true`, 30 Гц,
+`sensor_timeout: 0.3`. Его входы:
 
-VESC не измеряет позу: его position/quaternion нельзя слепо включать в EKF.
-Разность гусениц не используется как yaw: при проскальзывании она недостоверна.
-`vy=0` тоже не включён как фиктивное точное измерение: гусеницы могут скользить.
-Глобальный EKF использует исходные VESC/IMU, а не повторно локальный EKF + те же
-датчики, чтобы не учитывать одни и те же данные дважды внутри этого фильтра.
+- `odom0: /odometry/local`: **только vx**, индекс 6; X/Y/yaw локальной позы не
+  фьюзятся дополнительно с теми же исходными датчиками.
+- `imu0: /imu/data`: абсолютный yaw (индекс 5) и wz (11),
+  `relative=false`, `differential=false`; TF монтажа обязателен.
+- `odom1: /odometry/gps`: только X/Y (0,1), `relative=false`, `differential=false`.
 
-Откалибруйте `distance_per_revolution`, `tacho_counts_per_revolution`,
-`odometry_scale`, знаки энкодеров/моторов и эффективную `wheel_separation`
-в hardware launch. Существующие 0.48 м и коэффициент 1.15 взяты из проекта,
-не из нового измерения. Ковариации задавайте по фактическому шуму;
-слишком маленькая ковариация заставляет фильтр чрезмерно доверять плохим данным.
-Начните с текущего профиля и анализируйте rosbag; не меняйте process noise
-наугад, скрывая ошибки осей или масштаба.
+Порядок 15 флагов robot_localization: `x y z roll pitch yaw vx vy vz vroll vpitch vyaw ax ay az`.
+Глобальный EKF по-прежнему предсказывает состояние между GPS-измерениями;
+мы не заявляем, что вся навигация теперь обходится без интегрирования/дрейфа.
+Не включать локальную позу как абсолютную GPS-позицию, не использовать суммарный
+путь гусениц как `pose.position.x`. `/odom/vesc` оставлен для диагностики/guard,
+а не как второй дублирующий вход скорости EKF.
+
+Для калибровки используются `distance_per_revolution`, `tacho_counts_per_revolution`,
+общий `odometry_scale` и новые индивидуальные `left_odometry_scale`,
+`right_odometry_scale`. Все параметры привода применяются при запуске.
+Готовые числа из проекта — начальная оценка, не результат нового измерения.
 
 ### 4.4. navsat_transform и datum
 
@@ -433,7 +437,7 @@ VESC (драйвер выставляет большую ковариацию п
 | `gps_timeout` | 2.0 с |
 | `scan_timeout` | 0.4 с |
 | `imu_timeout` | 0.3 с |
-| `odom_timeout` (VESC, оба EKF, TF) | 0.4 с |
+| `odom_timeout` (VESC, локальная одометрия, GPS EKF, TF) | 0.4 с |
 | `max_gps_stddev` | 1.5 м, отдельно x/y |
 | `max_global_stddev` | 2.0 м, отдельно x/y |
 | `command_timeout` | 0.3 с |
@@ -478,7 +482,7 @@ Collision Monitor: препятствия и скорость контролир
 # declination_deg — пример СИНТАКСИСА; подставьте местное значение вместо 0.0
 ros2 launch project_start start.launch.py \
   gps_port:=/dev/ttyAMA2 gps_baud:=115200 \
-  imu_port:=/dev/ttyAMA1 lidar_port:=/dev/ttyUSB0 \
+  imu_i2c_bus:=1 imu_i2c_address:=75 lidar_port:=/dev/ttyUSB0 \
   declination_deg:=0.0 lidar_delay:=10.0
 ```
 
@@ -632,14 +636,16 @@ ROS_DOMAIN_ID и совместимые QoS. Профиль предназнач
 
 ```bash
 python3 -m compileall -q src
-PYTHONPATH=src/project_start:src/cmd_switcher:src/imu_stm32_bridge \
+PYTHONPATH=src/project_start:src/cmd_switcher:src/bno086_imu:src/kolesa_control \
   python3 -m pytest -q src/project_start/test/test_navigation_safety.py \
-  src/cmd_switcher/test/test_policy.py src/imu_stm32_bridge/test/test_protocol.py
+  src/cmd_switcher/test/test_policy.py src/bno086_imu/test \
+  src/kolesa_control/test src/project_start/test/test_counter_odometry.py \
+  src/project_start/test/test_odometry_ros_adapter.py
 ```
 
 Эти тесты проверяют схему/числа маршрута, максимальную длину отрезков,
-свежесть/ковариации, fail-closed выбор режима и структуру YAML/BT, а также имеющийся
-протокол IMU. Они не заменяют launch/action-тесты на ROS и испытания железа.
+свежесть/ковариации, fail-closed выбор режима и структуру YAML/BT, а также протокол
+SH-2/SHTP BNO086, единицы измерений, коррекцию склонения и свежесть IMU. Они не заменяют launch/action-тесты на ROS и испытания железа.
 
 Официальные справочники (выбирайте параметры именно Jazzy):
 

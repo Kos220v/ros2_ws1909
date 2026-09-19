@@ -17,9 +17,9 @@ def generate_launch_description():
             name="kolesa_control",
             output="screen",
             parameters=[{
-                # Порты (Raspberry Pi: uart4/uart5)
-                "left_port": "/dev/ttyAMA4",
-                "right_port": "/dev/ttyAMA5",
+                # Порты (Raspberry Pi: uart3/uart4)
+                "left_port": "/dev/ttyAMA3",
+                "right_port": "/dev/ttyAMA4",
                 "baud": 115200,
 
                 # Колея, м — только для раскладки cmd_vel по бортам
@@ -29,6 +29,8 @@ def generate_launch_description():
                 "tacho_counts_per_revolution": 2157.0,
                 "distance_per_revolution": 2.011,
                 "odometry_scale": 1.0,
+                "left_odometry_scale": 1.0,
+                "right_odometry_scale": 1.0,
 
                 # Направления
                 "invert_left": False,
@@ -47,6 +49,10 @@ def generate_launch_description():
                 "control_rate": 50.0,
                 "telemetry_rate": 20.0,
                 "cmd_timeout": 0.5,
+                "telemetry_stale_timeout": 0.5,
+                "telemetry_pair_max_skew": 0.10,
+                "tacho_jump_margin": 3.0,
+                "min_tacho_jump_threshold": 10.0,
 
                 # Публикации
                 "publish_odom": True,          # /odom/vesc — скорость для robot_localization

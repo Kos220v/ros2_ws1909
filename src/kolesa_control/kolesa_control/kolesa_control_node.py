@@ -1,40 +1,26 @@
 # -*- coding: utf-8 -*-
 
-"""
-Нода kolesa_control
+"""VESC duty control and hardware-counter odometry.
 
-Дифференциальное управление гусеничным роботом через два контроллера
-FS75100 / VESC по UART.
-
-ОДОМЕТРИЯ
----------
-Узел считает ТОЛЬКО то, что достоверно измеряет VESC: пройденный путь и
-линейную скорость каждой гусеницы по абсолютному тахометру. Угол поворота
-(yaw) здесь НЕ вычисляется — гусеничная машина в повороте проскальзывает,
-и разность тиков бортов не имеет отношения к реальному курсу. Курс берётся
-с инерциального модуля (imu_stm32_bridge) узлом robot_localization, который
-объединяет дистанцию VESC и ориентацию IMU в /odom.
-
-Подписки:
-  /cmd_vel            geometry_msgs/Twist
-
-Публикации:
-  /odom/vesc          nav_msgs/Odometry
-      Только скорость: twist.linear.x — скорость центра робота, м/с.
-      Поза и угловая скорость намеренно не заполняются (ковариация 1e6),
-      чтобы их никто случайно не «сфьюзил».
-  /joint_states       sensor_msgs/JointState
-      Положение (рад) и скорость (рад/с) левой и правой гусениц.
-  /kolesa/diagnostics diagnostic_msgs/DiagnosticArray
-      Напряжение, скважность, обороты, тики, пройденный путь по бортам.
+Signed displacement: unwrapped tachometer * calibrated meters/count.
+Total track travel: unwrapped tachometer_abs * calibrated meters/count.
+No RPM/speed integration is used for these distances. /odom/vesc publishes
+only measured vx; scalar track distance must NOT masquerade as Cartesian x.
+counter_odometry estimates local XY directly from timestamped ticks + BNO086.
+robot_localization provides GNSS-corrected map localization.
 """
 
 import math
 import time
+import uuid
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from rclpy.time import Time
+from rcl_interfaces.msg import ParameterDescriptor
+from std_msgs.msg import Float64
+from tracked_robot_interfaces.msg import TrackTicks
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
@@ -42,6 +28,7 @@ from sensor_msgs.msg import JointState
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 
 from .vesc_driver import VescDriver
+from .tachometer import Tachometer
 
 
 # Ковариация «это значение не измерено, не используйте его».
@@ -63,24 +50,13 @@ def velocity_to_duty_cycle(velocity, max_velocity, duty_min=0.03, duty_max=1.0):
     return duty_magnitude if velocity >= 0 else -duty_magnitude
 
 
-def delta_i32(current, previous):
-    """Разница двух int32-счётчиков с учётом переполнения."""
-    current = int(current)
-    previous = int(previous)
-    delta = current - previous
-    if delta > 2147483647:
-        delta -= 4294967296
-    elif delta < -2147483648:
-        delta += 4294967296
-    return delta
-
-
 class KolesaControl(Node):
     def __init__(self):
         super().__init__("kolesa_control")
 
         # ----------------------------------------------------------- параметры
-        p = self.declare_parameter
+        def p(name, value):
+            return self.declare_parameter(name, value, ParameterDescriptor(read_only=True))
 
         p("left_port", "/dev/ttyAMA3")
         p("right_port", "/dev/ttyAMA4")
@@ -93,6 +69,8 @@ class KolesaControl(Node):
         p("tacho_counts_per_revolution", 2157.0)
         p("distance_per_revolution", 2.011)
         p("odometry_scale", 1.0)
+        p("left_odometry_scale", 1.0)
+        p("right_odometry_scale", 1.0)
 
         # Инверсии
         p("invert_left", False)
@@ -113,7 +91,8 @@ class KolesaControl(Node):
 
         # Фильтрация скачков тахометра
         p("tacho_jump_margin", 3.0)
-        p("min_tacho_jump_threshold", 500.0)
+        p("min_tacho_jump_threshold", 10.0)
+        p("telemetry_pair_max_skew", 0.10)
 
         # Публикации
         p("publish_odom", True)
@@ -135,6 +114,8 @@ class KolesaControl(Node):
         self.tacho_counts_per_revolution = float(g("tacho_counts_per_revolution").value)
         self.distance_per_revolution = float(g("distance_per_revolution").value)
         self.odometry_scale = float(g("odometry_scale").value)
+        self.track_scales = {side: float(g(side + "_odometry_scale").value)
+                             for side in ("left", "right")}
 
         self.radius = self.distance_per_revolution / (2.0 * math.pi)
 
@@ -154,6 +135,7 @@ class KolesaControl(Node):
         self.telemetry_stale_timeout = float(g("telemetry_stale_timeout").value)
         self.tacho_jump_margin = float(g("tacho_jump_margin").value)
         self.min_tacho_jump_threshold = float(g("min_tacho_jump_threshold").value)
+        self.telemetry_pair_max_skew = float(g("telemetry_pair_max_skew").value)
 
         self.pub_odom = bool(g("publish_odom").value)
         self.odom_topic = str(g("odom_topic").value)
@@ -204,6 +186,28 @@ class KolesaControl(Node):
             "right": self._make_wheel_state(),
         }
 
+        self.trackers = {
+            side: Tachometer(
+                self.distance_per_tacho_count * self.odometry_scale * self.track_scales[side],
+                self.rad_per_tacho_count, sign=sign,
+                max_speed=self.max_linear_velocity + self.max_angular_velocity * self.separation / 2,
+                jump_margin=self.tacho_jump_margin,
+                min_jump_counts=self.min_tacho_jump_threshold,
+                stale_timeout=self.telemetry_stale_timeout)
+            for side, sign in (("left", self.enc_inv_left), ("right", self.enc_inv_right))
+        }
+        self.odometry_session = str(uuid.uuid4())
+        self.track_pubs = {
+            side: self.create_publisher(TrackTicks, "kolesa/track_" + side, 50)
+            for side in ("left", "right")
+        }
+        self.last_track_stamps = {"left": None, "right": None}
+        self.last_published_pair = (None, None)
+        self.distance_pubs = {
+            name: self.create_publisher(Float64, "kolesa/distance_" + name, 10)
+            for name in ("left", "right", "center")
+        }
+
         # ----------------------------------------------------------- топики
         self.create_subscription(Twist, "cmd_vel", self._on_cmd_vel, 10)
 
@@ -220,31 +224,32 @@ class KolesaControl(Node):
         self.create_timer(1.0 / self.control_rate, self._control_tick)
         self.create_timer(1.0 / self.telemetry_rate, self._telemetry_tick)
 
-        self.get_logger().info("kolesa_control запущена (абсолютный тахометр VESC)")
+        self.get_logger().info("kolesa_control: signed tachometer + hardware travel counter")
 
     # ------------------------------------------------------------- параметры
     def _validate_params(self):
-        if (
-            self.radius <= 0.0
-            or self.separation <= 0.0
-            or self.control_rate <= 0.0
-            or self.telemetry_rate <= 0.0
-            or self.max_linear_velocity <= 0.0
-            or self.max_angular_velocity <= 0.0
-        ):
-            raise ValueError("Некорректные параметры конфигурации геометрии или скорости")
-        if self.tacho_counts_per_revolution <= 0.0:
-            raise ValueError("tacho_counts_per_revolution должен быть > 0")
-        if self.distance_per_revolution <= 0.0:
-            raise ValueError("distance_per_revolution должен быть > 0")
-        if self.duty_min < 0.0 or self.duty_max <= 0.0 or self.duty_min >= self.duty_max:
-            raise ValueError("Некорректные duty_min/duty_max (должно быть 0 <= duty_min < duty_max)")
-        if self.duty_max > 1.0:
-            raise ValueError("duty_max не может быть больше 1.0 (100% скважности)")
+        positive = (
+            self.separation, self.tacho_counts_per_revolution, self.distance_per_revolution,
+            self.odometry_scale, *self.track_scales.values(), self.max_linear_velocity, self.max_angular_velocity,
+            self.control_rate, self.telemetry_rate, self.cmd_timeout,
+            self.telemetry_stale_timeout, self.tacho_jump_margin, self.telemetry_pair_max_skew,
+        )
+        if any(not math.isfinite(v) or v <= 0 for v in positive):
+            raise ValueError("Geometry, scales, rates and timeouts must be finite and positive")
+        if (not math.isfinite(self.min_tacho_jump_threshold)
+                or self.min_tacho_jump_threshold < 0):
+            raise ValueError("min_tacho_jump_threshold must be finite and nonnegative")
+        if not (math.isfinite(self.duty_min) and math.isfinite(self.duty_max)
+                and 0 <= self.duty_min < self.duty_max <= 1):
+            raise ValueError("Duty limits must satisfy 0 <= duty_min < duty_max <= 1")
+        if self.telemetry_pair_max_skew > self.telemetry_stale_timeout:
+            raise ValueError("Pair skew must not exceed telemetry_stale_timeout")
 
     def _make_wheel_state(self):
         return {
-            "pos": 0.0, "distance": 0.0, "speed": 0.0, "omega": 0.0,
+            "pos": 0.0, "distance": 0.0, "travel": 0.0, "speed": 0.0, "omega": 0.0,
+            "measurement_valid": False, "counter_valid": False, "counter_error": "waiting for tachometers",
+            "signed_counts": 0,
             "raw_tacho": None, "raw_tacho_abs": None,
             "prev_tacho": None,
             "initial_tacho": None,
@@ -259,14 +264,15 @@ class KolesaControl(Node):
 
     # ------------------------------------------------------------- callbacks
     def _on_cmd_vel(self, msg: Twist):
-        self.cmd_v = float(msg.linear.x)
-        self.cmd_w = float(msg.angular.z)
+        finite = math.isfinite(msg.linear.x) and math.isfinite(msg.angular.z)
+        self.cmd_v = float(msg.linear.x) if finite else 0.0
+        self.cmd_w = float(msg.angular.z) if finite else 0.0
         self.last_cmd_time = self.get_clock().now()
 
     def _control_tick(self):
         dt = (self.get_clock().now() - self.last_cmd_time).nanoseconds * 1e-9
 
-        if dt > self.cmd_timeout:
+        if not 0 <= dt <= self.cmd_timeout or not self._both_tracks_valid():
             v = 0.0
             w = 0.0
         else:
@@ -307,107 +313,72 @@ class KolesaControl(Node):
         tl = self.left.get_telemetry()
         tr = self.right.get_telemetry()
 
-        self._update_wheel_from_tacho("left", tl, direction_sign=self.enc_inv_left)
-        self._update_wheel_from_tacho("right", tr, direction_sign=self.enc_inv_right)
+        self._update_wheel_from_tacho("left", tl)
+        self._update_wheel_from_tacho("right", tr)
         self._update_stale_state("left")
         self._update_stale_state("right")
 
-        if self.pub_odom:
+        self._publish_track_samples()
+        pair = tuple(self.wheels[side]["last_rx_time"] for side in ("left", "right"))
+        valid = self._both_tracks_valid()
+        new_pair = valid and all(t != p for t, p in zip(pair, self.last_published_pair))
+        if self.pub_odom and (new_pair or not valid):
             self._publish_odom()
-        if self.pub_js:
-            self._publish_joint_states()
+        if new_pair:
+            self.last_published_pair = pair
+            for side in ("left", "right"):
+                self.distance_pubs[side].publish(Float64(data=self.wheels[side]["distance"]))
+            distance = (self.wheels["left"]["distance"] + self.wheels["right"]["distance"]) / 2
+            self.distance_pubs["center"].publish(Float64(data=distance))
+            if self.pub_js:
+                self._publish_joint_states()
         if self.pub_diag:
             self._publish_diagnostics()
 
-    def _update_wheel_from_tacho(self, side, telemetry, direction_sign):
+    def _update_wheel_from_tacho(self, side, telemetry):
         st = self.wheels[side]
-
         if telemetry is None:
             return
-
-        if "tachometer" not in telemetry:
+        rx_time = telemetry.get("_rx_time")
+        # Never manufacture a new receipt time for a cached telemetry dict.
+        if (not isinstance(rx_time, (int, float)) or not math.isfinite(rx_time)
+                or rx_time > time.monotonic()
+                or (st["last_rx_time"] is not None and rx_time <= st["last_rx_time"])):
             return
-
-        rx_time_raw = telemetry.get("_rx_time", None)
-        if rx_time_raw is not None:
-            rx_time = float(rx_time_raw)
-            if st["last_rx_time"] == rx_time:
-                return
-        else:
-            rx_time = time.monotonic()
-
+        tracker = self.trackers[side]
         st["last_rx_time"] = rx_time
-        st["telemetry_age"] = 0.0
-        st["stale"] = False
-
-        current_tacho = int(telemetry["tachometer"])
-        st["raw_tacho"] = current_tacho
-
-        if "tachometer_abs" in telemetry:
-            st["raw_tacho_abs"] = int(telemetry["tachometer_abs"])
-        elif "tacho_abs" in telemetry:
-            st["raw_tacho_abs"] = int(telemetry["tacho_abs"])
-
-        raw_erpm = telemetry.get("erpm", telemetry.get("rpm", 0.0))
-        st["erpm"] = float(raw_erpm)
-        st["duty_measured"] = float(telemetry.get("duty", 0.0))
-        st["voltage"] = float(telemetry.get("v_in", telemetry.get("voltage", 0.0)) or 0.0)
-        st["current_motor"] = float(telemetry.get("current_motor", 0.0) or 0.0)
-        st["temp_fet"] = float(telemetry.get("temp_fet", telemetry.get("temp_mos", 0.0)) or 0.0)
-        st["fault"] = int(telemetry.get("fault", telemetry.get("fault_code", 0)) or 0)
-
-        if st["initial_tacho"] is None:
-            st["initial_tacho"] = current_tacho
-            st["prev_tacho"] = current_tacho
-            st["last_tacho_time"] = rx_time
-            st["speed"] = 0.0
-            st["omega"] = 0.0
-            st["last_delta_counts"] = 0
-            self.get_logger().info(f"[{side}] initial_tacho = {current_tacho}")
+        try:
+            raw_tacho = telemetry.get("tachometer")
+            raw_abs = telemetry.get("tachometer_abs")
+            for key, source in (("erpm", "rpm"), ("duty_measured", "duty"),
+                                ("voltage", "v_in"), ("current_motor", "current_motor"),
+                                ("temp_fet", "temp_fet")):
+                value = telemetry.get(source)
+                if not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise ValueError("Incomplete/nonfinite VESC telemetry: " + source)
+                st[key] = float(value)
+            fault = telemetry.get("fault_code")
+            if type(fault) is not int:
+                raise ValueError("Missing VESC fault code")
+            st["fault"] = fault
+            accepted = tracker.update(raw_tacho, raw_abs, rx_time)
+            st["raw_tacho"], st["raw_tacho_abs"] = raw_tacho, raw_abs
+        except (TypeError, ValueError) as error:
+            st["measurement_valid"] = st["counter_valid"] = False
+            st["counter_error"] = str(error)
+            st["speed"] = st["omega"] = 0.0
             return
-
-        offset = delta_i32(current_tacho, st["initial_tacho"]) * direction_sign
-        st["pos"] = offset * self.rad_per_tacho_count * self.odometry_scale
-        st["distance"] = offset * self.distance_per_tacho_count * self.odometry_scale
-
-        dt = rx_time - st["last_tacho_time"]
-        delta_raw = delta_i32(current_tacho, st["prev_tacho"])
-        st["prev_tacho"] = current_tacho
-        st["last_tacho_time"] = rx_time
-
-        if not self._tacho_delta_is_reasonable(delta_raw, dt):
-            self.get_logger().warning(
-                f"[{side}] подозрительный скачок tachometer: "
-                f"delta={delta_raw}, dt={dt:.3f} c."
-            )
-            st["speed"] = 0.0
-            st["omega"] = 0.0
-            st["last_delta_counts"] = 0
-            return
-
-        delta = delta_raw * direction_sign
-        st["last_delta_counts"] = delta
-        st["total_abs_counts"] += abs(delta_raw)
-
-        if dt > 1e-6:
-            distance_delta = delta * self.distance_per_tacho_count * self.odometry_scale
-            angle_delta = delta * self.rad_per_tacho_count * self.odometry_scale
-            st["omega"] = angle_delta / dt
-            st["speed"] = distance_delta / dt
-        else:
-            st["omega"] = 0.0
-            st["speed"] = 0.0
-
-    def _tacho_delta_is_reasonable(self, delta_counts, dt):
-        if dt <= 0.0:
-            return True
-        min_dt = 1.0 / self.telemetry_rate
-        max_counts_per_sec = self.max_linear_velocity / self.distance_per_tacho_count
-        threshold = max(
-            self.min_tacho_jump_threshold,
-            max_counts_per_sec * max(dt, min_dt) * self.tacho_jump_margin,
+        st.update(
+            initial_tacho=tracker.initial, signed_counts=tracker.counts,
+            total_abs_counts=tracker.travel_counts, last_delta_counts=tracker.delta_counts,
+            pos=tracker.angle, distance=tracker.distance, travel=tracker.travel,
+            speed=tracker.speed, omega=tracker.omega,
+            measurement_valid=accepted and not tracker.fault and not fault,
+            counter_valid=accepted and tracker.velocity_valid and not fault,
+            counter_error=tracker.fault or ("VESC fault" if fault else ""),
         )
-        return abs(delta_counts) <= threshold
+        if tracker.fault:
+            st["speed"] = st["omega"] = 0.0
 
     def _update_stale_state(self, side):
         st = self.wheels[side]
@@ -422,7 +393,7 @@ class KolesaControl(Node):
 
         age = time.monotonic() - st["last_rx_time"]
         st["telemetry_age"] = age
-        if age > self.telemetry_stale_timeout:
+        if not 0 <= age <= self.telemetry_stale_timeout:
             st["stale"] = True
             st["speed"] = 0.0
             st["omega"] = 0.0
@@ -435,29 +406,58 @@ class KolesaControl(Node):
     def _both_tracks_valid(self):
         left = self.wheels["left"]
         right = self.wheels["right"]
+        now = time.monotonic()
         return (
-            left["initial_tacho"] is not None
-            and right["initial_tacho"] is not None
-            and not left["stale"]
-            and not right["stale"]
+            all(st["counter_valid"] and st["last_rx_time"] is not None
+                and 0 <= now - st["last_rx_time"] <= self.telemetry_stale_timeout
+                for st in (left, right))
+            and abs(left["last_rx_time"] - right["last_rx_time"]) <= self.telemetry_pair_max_skew
         )
+
+    def _publish_track_samples(self):
+        # Publish independent timestamps: averaging/asynchronous pairing belongs
+        # in counter_odometry, not in the hardware node.
+        for side in ("left", "right"):
+            state = self.wheels[side]
+            stamp = state["last_rx_time"]
+            valid = bool(state["measurement_valid"] and not state["stale"])
+            if valid and stamp == self.last_track_stamps[side]:
+                continue
+            msg = TrackTicks()
+            ros_ns = self.get_clock().now().nanoseconds
+            age = max(0.0, time.monotonic() - stamp) if stamp is not None else 0.0
+            msg.header.stamp = Time(nanoseconds=max(0, ros_ns - int(age * 1e9))).to_msg()
+            msg.header.frame_id = self.base_frame
+            msg.session_id = self.odometry_session
+            msg.position_ticks = self.trackers[side].counts
+            msg.travel_ticks = self.trackers[side].travel_counts
+            msg.meters_per_tick = self.trackers[side].meters_per_count
+            msg.valid = valid
+            self.track_pubs[side].publish(msg)
+            self.last_track_stamps[side] = stamp
+
+    def _measurement_stamp(self):
+        now = time.monotonic()
+        received = min(self.wheels[side]["last_rx_time"] for side in ("left", "right"))
+        stamp = self.get_clock().now().nanoseconds - int(max(0.0, now - received) * 1e9)
+        return Time(nanoseconds=max(0, stamp)).to_msg()
 
     def _publish_odom(self):
         """
         /odom/vesc: ТОЛЬКО линейная скорость центра робота.
 
         Поза и угловая скорость не измеряются (ковариация 1e6). Курс даёт
-        IMU, интеграцию в X/Y выполняет robot_localization.
+        BNO086; локальные X/Y считает counter_odometry из /kolesa/track_* + IMU.
         """
         left = self.wheels["left"]
         right = self.wheels["right"]
 
         msg = Odometry()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        valid = self._both_tracks_valid()
+        msg.header.stamp = self._measurement_stamp() if valid else self.get_clock().now().to_msg()
         msg.header.frame_id = self.odom_frame
         msg.child_frame_id = self.base_frame
 
-        valid = self._both_tracks_valid()
         v_center = 0.5 * (left["speed"] + right["speed"]) if valid else 0.0
 
         msg.twist.twist.linear.x = v_center
@@ -479,7 +479,7 @@ class KolesaControl(Node):
 
     def _publish_joint_states(self):
         js = JointState()
-        js.header.stamp = self.get_clock().now().to_msg()
+        js.header.stamp = self._measurement_stamp()
         js.name = [self.left_joint, self.right_joint]
         js.position = [self.wheels["left"]["pos"], self.wheels["right"]["pos"]]
         js.velocity = [self.wheels["left"]["omega"], self.wheels["right"]["omega"]]
@@ -505,6 +505,9 @@ class KolesaControl(Node):
         elif st["stale"]:
             status.level = DiagnosticStatus.WARN
             status.message = "Телеметрия устарела"
+        elif st["counter_error"]:
+            status.level = DiagnosticStatus.ERROR
+            status.message = st["counter_error"]
         elif st["fault"]:
             status.level = DiagnosticStatus.ERROR
             status.message = f"VESC fault code {st['fault']}"
@@ -525,6 +528,9 @@ class KolesaControl(Node):
         kv(KeyValue(key="raw_tachometer", value=str(st["raw_tacho"])))
         kv(KeyValue(key="raw_tachometer_abs", value=str(st["raw_tacho_abs"])))
         kv(KeyValue(key="initial_tacho", value=str(st["initial_tacho"])))
+        kv(KeyValue(key="counter_valid", value=str(st["counter_valid"])))
+        kv(KeyValue(key="signed_counts", value=str(st["signed_counts"])))
+        kv(KeyValue(key="travel_m", value=f"{st['travel']:.3f}"))
         kv(KeyValue(key="last_delta_counts", value=str(st["last_delta_counts"])))
         kv(KeyValue(key="total_abs_counts", value=str(st["total_abs_counts"])))
         kv(KeyValue(key="total_abs_revolutions", value=f"{total_abs_revolutions:.2f}"))

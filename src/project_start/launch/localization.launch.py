@@ -1,4 +1,4 @@
-"""Two-filter GNSS localization; the sole owners of dynamic robot TF."""
+"""Counter/IMU local odometry plus a GNSS EKF; unique owners of dynamic TF."""
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -12,9 +12,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('localization_params', default_value=os.path.join(
             get_package_share_directory('project_start'), 'config', 'localization.yaml')),
-        Node(package='robot_localization', executable='ekf_node', name='ekf_local',
-             parameters=[params], remappings=[('odometry/filtered', '/odometry/local')],
-             output='screen'),
+        Node(package='project_start', executable='counter_odometry', name='counter_odometry',
+             parameters=[params], output='screen'),
         Node(package='robot_localization', executable='ekf_node', name='ekf_global',
              parameters=[params], remappings=[('odometry/filtered', '/odometry/global')],
              output='screen'),

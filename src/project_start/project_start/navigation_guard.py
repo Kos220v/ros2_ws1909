@@ -25,6 +25,7 @@ class NavigationGuard(Node):
             if not math.isfinite(self.p[key]) or self.p[key] <= 0:
                 raise ValueError(f'{key} must be finite and positive')
         self.samples = {}
+        self.odom_health = (False, -float('inf'))
         self.command = (Twist(), -float('inf'))
         self.mission = (False, -float('inf'))
         self.mode = 1
@@ -40,12 +41,16 @@ class NavigationGuard(Node):
                                 ('global', Odometry, '/odometry/global')]:
             self.create_subscription(cls, topic, lambda msg, k=key: self.record(k, msg),
                                      qos_profile_sensor_data)
+        self.create_subscription(Bool, '/odometry/healthy', self.on_odom_health, 10)
         self.create_subscription(Twist, '/cmd_vel/checked', self.on_command, 10)
         self.create_subscription(Bool, '/navigation/mission_enabled', self.on_mission, 10)
         self.create_subscription(Int8, '/control_mode', self.on_mode, 10)
         self.pub = self.create_publisher(Twist, '/cmd_vel/auto', 10)
         self.ready_pub = self.create_publisher(Bool, '/navigation/ready', 10)
         self.create_timer(0.05, self.tick)
+
+    def on_odom_health(self, msg):
+        self.odom_health = (msg.data, time.monotonic())
 
     def record(self, key, msg):
         self.samples[key] = (msg, time.monotonic())
@@ -64,6 +69,8 @@ class NavigationGuard(Node):
             self.fault = self.was_active = False
 
     def health(self, now):
+        if not self.odom_health[0] or not 0 <= now-self.odom_health[1] <= self.p['odom_timeout']:
+            return 'counter/IMU odometry unhealthy'
         ros_now = self.get_clock().now().nanoseconds / 1e9
         for key in ('gps', 'scan', 'imu', 'wheel', 'local', 'global'):
             if key not in self.samples:
