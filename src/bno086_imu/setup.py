@@ -12,5 +12,8 @@ setup(
     install_requires=['setuptools'], zip_safe=True,
     maintainer='admin', maintainer_email='admin@example.com', license='Apache-2.0',
     description='BNO086 SHTP over Linux I2C with fresh, quality-gated ROS IMU data',
-    entry_points={'console_scripts': ['imu_node = bno086_imu.node:main']},
+    entry_points={'console_scripts': [
+        'imu_node = bno086_imu.node:main',
+        'bno086_diagnose = bno086_imu.diagnose:main',
+    ]},
 )

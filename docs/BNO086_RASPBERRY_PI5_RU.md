@@ -495,3 +495,10 @@ PYTHONPATH=src/bno086_imu:src/project_start:src/cmd_switcher \
 - [CEVA SH-2 reference implementation](https://github.com/ceva-dsp/sh2)
 - [SparkFun BNO08x library: SHTP I²C HAL](https://github.com/sparkfun/SparkFun_BNO08x_Arduino_Library)
 - [Raspberry Pi config.txt, периферийные интерфейсы](https://www.raspberrypi.com/documentation/computers/config_txt.html)
+
+## Диагностика тайм-аута INT после сброса
+
+Доступна [отдельная стендовая утилита](BNO086_DIAGNOSTIC_RU.md): наблюдает INT без
+паузы 300 мс после RST, проверяет оба адреса отдельными попытками и выполняет
+raw SHTP/Product ID обмен даже при INT HIGH. Без ROS, без публикации IMU,
+только на стоянке с отключёнными моторами и другими клиентами шины.
