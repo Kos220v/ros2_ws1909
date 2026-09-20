@@ -23,6 +23,7 @@ class Bno086Node(Node):
         super().__init__('bno086_imu')
         defaults = dict(
             i2c_bus=1, i2c_address=0x4B, frame_id='imu_link',
+            gpio_chip='auto', rst_gpio=17, int_gpio=27,
             rate_hz=25.0, mag_rate_hz=10.0, declination_deg=0.0,
             sample_max_age=0.10, reconnect_timeout=2.0, min_accuracy=2,
             max_heading_error=0.35, orientation_stddev=0.05,
@@ -34,6 +35,7 @@ class Bno086Node(Node):
             for key, value in defaults.items()}
         self.validate()
         self.transport = None
+        self.fault_reason = None
         self.samples = Samples(self.p['sample_max_age'], self.p['min_accuracy'],
                                self.p['max_heading_error'])
         self.imu_pub = self.create_publisher(Imu, 'data', qos_profile_sensor_data)
@@ -44,7 +46,8 @@ class Bno086Node(Node):
         self.last_published = -float('inf')
         self.last_reason = 'waiting for calibrated Rotation Vector'
         try:
-            self.transport = ShtpI2C(self.p['i2c_bus'], self.p['i2c_address'])
+            self.transport = ShtpI2C(self.p['i2c_bus'], self.p['i2c_address'],
+                                     self.p['gpio_chip'], self.p['rst_gpio'], self.p['int_gpio'])
             self.transport.configure(self.p['rate_hz'], self.p['mag_rate_hz'])
         except Exception:
             self.close()
@@ -58,6 +61,13 @@ class Bno086Node(Node):
             'waiting for fresh calibrated accel/gyro/Rotation Vector reports')
 
     def validate(self):
+        if not isinstance(self.p['gpio_chip'], str) or not self.p['gpio_chip']:
+            raise ValueError('gpio_chip must be auto or a GPIO character device path')
+        if (any(type(self.p[k]) is not int or not 0 <= self.p[k] <= 27
+                for k in ('rst_gpio', 'int_gpio'))
+                or self.p['rst_gpio'] == self.p['int_gpio']
+                or {self.p['rst_gpio'], self.p['int_gpio']} & {2, 3}):
+            raise ValueError('RST/INT must be distinct header GPIOs 0..27, not I2C GPIO2/3')
         if type(self.p['i2c_bus']) is not int or self.p['i2c_bus'] < 0:
             raise ValueError('i2c_bus must be a nonnegative integer')
         if type(self.p['i2c_address']) is not int or self.p['i2c_address'] not in (0x4A, 0x4B):
@@ -82,6 +92,18 @@ class Bno086Node(Node):
             raise ValueError('frame_id must not be empty')
 
     def poll(self):
+        if self.fault_reason is not None:
+            return
+        try:
+            self._poll()
+        except Exception as error:
+            self.fault_reason = str(error)
+            self.get_logger().error(
+                f'IMU fault latched: {error}; stop robot and restart hardware/localization/navigation')
+            self.close()
+            self.diagnostics()
+
+    def _poll(self):
         begin = time.monotonic()
         # A stalled executor may have left old samples in the hardware queue.
         if begin - self.last_poll > 0.2:
@@ -158,9 +180,12 @@ class Bno086Node(Node):
         status = DiagnosticStatus()
         status.name = 'BNO086 IMU'
         status.hardware_id = f"i2c-{self.p['i2c_bus']}:0x{self.p['i2c_address']:02x}"
-        healthy = now - self.last_published <= self.p['sample_max_age']
+        healthy = self.fault_reason is None and now - self.last_published <= self.p['sample_max_age']
         status.level = DiagnosticStatus.OK if healthy else DiagnosticStatus.WARN
         status.message = 'fresh calibrated IMU' if healthy else 'waiting for fresh/accurate IMU; no data published'
+        if self.fault_reason is not None:
+            status.level = DiagnosticStatus.ERROR
+            status.message = 'IMU fault latched: ' + self.fault_reason
         if ROTATION in self.samples.latest:
             report, received = self.samples.latest[ROTATION]
             values = dict(rotation_accuracy=report.accuracy,
@@ -193,7 +218,7 @@ def main(args=None):
     except Exception as error:
         code = 1
         if node is not None:
-            node.get_logger().error(f'IMU stopped: {error}; launch will reconnect')
+            node.get_logger().error(f'IMU stopped: {error}; explicit stationary restart required')
         else:
             print(f'BNO086 initialization failed: {error}', flush=True)
     finally:

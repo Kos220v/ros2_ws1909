@@ -70,7 +70,7 @@ controller_server / behavior_server
 | `src/project_start/launch/start.launch.py` | Драйверы, URDF/TF датчиков, пульт, mux |
 | `src/project_start/launch/localization.launch.py` | counter_odometry, глобальный EKF и navsat_transform |
 | `src/project_start/config/localization.yaml` | Настройка локализации |
-| `src/bno086_imu/config/imu.yaml` | I²C, частоты, качество BNO086 и склонение |
+| `src/bno086_imu/config/imu.yaml` | I²C, обязательные RST/INT, частоты, качество BNO086 и склонение |
 | `src/project_start/launch/navigation.launch.py` | Nav2, lifecycle manager, защитный gate |
 | `src/project_start/config/nav2.yaml` | Параметры всех используемых компонентов Nav2 |
 | `src/project_start/behavior_trees/gps_navigation.xml` | Перепланирование и ограниченные recovery |
@@ -655,3 +655,16 @@ SH-2/SHTP BNO086, единицы измерений, коррекцию скло
 - https://docs.nav2.org/configuration/packages/configuring-dwb-controller.html
 - https://docs.nav2.org/configuration/packages/collision_monitor/configuring-collision-monitor-node.html
 - https://docs.ros.org/en/jazzy/p/robot_localization/
+
+
+### Сбой и сброс BNO086 с RST/INT
+
+Драйвер использует RST (GPIO17/пин 11) и INT (GPIO27/пин 13), проверив отсутствие
+конфликта с UART/HAT. `start.launch.py` принимает `imu_gpio_chip`, `imu_rst_gpio`,
+`imu_int_gpio`. При аппаратном/протокольном сбое IMU прекращает измерения и
+защёлкивает ERROR; автоматический respawn отключён. Watchdog свежести IMU и
+локальной одометрии блокирует AUTO; это не аппаратный E-stop.
+После устранения причины остановить и заново запустить hardware → localization
+→ navigation на неподвижном роботе, проверить курс, затем создать новую миссию.
+Один MANUAL→AUTO или отдельный перезапуск IMU не восстанавливает согласованность
+состояния одометрии и глобального фильтра после сброса ориентации.

@@ -160,12 +160,16 @@ def launch_setup(context, *args, **kwargs):
         }],
     )
 
+    # BNO086: обязательные RST/INT; без respawn, reset меняет состояние курса.
     # ------------------------------------------------------- BNO086 по I2C
     imu_params = os.path.join(imu_share, 'config', 'imu.yaml')
     imu_node = Node(
         package='bno086_imu', executable='imu_node', name='bno086_imu',
-        namespace='imu', output='screen', respawn=True, respawn_delay=3.0,
+        namespace='imu', output='screen', respawn=False,
         parameters=[imu_params, {
+            'gpio_chip': ParameterValue(LaunchConfiguration('imu_gpio_chip'), value_type=str),
+            'rst_gpio': ParameterValue(LaunchConfiguration('imu_rst_gpio'), value_type=int),
+            'int_gpio': ParameterValue(LaunchConfiguration('imu_int_gpio'), value_type=int),
             'i2c_bus': ParameterValue(LaunchConfiguration('imu_i2c_bus'), value_type=int),
             'i2c_address': ParameterValue(LaunchConfiguration('imu_i2c_address'), value_type=int),
             'declination_deg': ParameterValue(LaunchConfiguration('declination_deg'), value_type=float),
@@ -251,6 +255,9 @@ def generate_launch_description():
         DeclareLaunchArgument('gps_port', default_value='/dev/ttyAMA2',
                               description='Порт GNSS (по умолчанию /dev/ttyAMA2)'),
         DeclareLaunchArgument('gps_baud', default_value='115200'),
+        DeclareLaunchArgument('imu_gpio_chip', default_value='auto'),
+        DeclareLaunchArgument('imu_rst_gpio', default_value='17'),
+        DeclareLaunchArgument('imu_int_gpio', default_value='27'),
         DeclareLaunchArgument('imu_i2c_bus', default_value='1',
                               description='Номер шины /dev/i2c-N для BNO086'),
         DeclareLaunchArgument('imu_i2c_address', default_value='75',

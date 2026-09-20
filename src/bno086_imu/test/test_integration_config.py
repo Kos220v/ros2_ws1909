@@ -45,3 +45,21 @@ def test_sensor_frame_exists_in_urdf():
     joint = tree.find(".//joint[@name='base_to_imu']")
     assert joint.find('parent').attrib['link'] == 'base_link'
     assert joint.find('child').attrib['link'] == 'imu_link'
+
+
+def test_required_gpio_and_no_silent_respawn():
+    import ast
+    package = ROOT / 'src/bno086_imu'
+    cfg = yaml.safe_load((package / 'config/imu.yaml').read_text())['/**/bno086_imu']['ros__parameters']
+    assert (cfg['gpio_chip'], cfg['rst_gpio'], cfg['int_gpio']) == ('auto', 17, 27)
+    assert 'python3-libgpiod' in (package / 'package.xml').read_text()
+    for path, prefix in [(package / 'launch/imu.launch.py', ''),
+                         (ROOT / 'src/project_start/launch/start.launch.py', 'imu_')]:
+        tree = ast.parse(path.read_text())
+        node = next(n for n in ast.walk(tree) if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Name) and n.func.id == 'Node'
+                    and any(k.arg == 'package' and isinstance(k.value, ast.Constant)
+                            and k.value.value == 'bno086_imu' for k in n.keywords))
+        assert next(k.value.value for k in node.keywords if k.arg == 'respawn') is False
+        for key in ('gpio_chip', 'rst_gpio', 'int_gpio'):
+            assert prefix + key in path.read_text()

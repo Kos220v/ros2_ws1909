@@ -5,14 +5,17 @@ from .protocol import ACCEL, GYRO, MAG, ROTATION, ProtocolError, header, packet,
 
 
 class ShtpI2C:
-    def __init__(self, bus_number, address):
+    def __init__(self, bus_number, address, gpio_chip='auto', rst_gpio=17, int_gpio=27):
         # Lazy import lets protocol and fake-bus tests run without hardware packages.
         from smbus2 import SMBus, i2c_msg
+        self.gpio = None
         self.bus = SMBus(bus_number)
         try:
             # Cooperative exclusive bus ownership: a second copy must not reset
             # this sensor underneath the running navigation stack.
             fcntl.flock(self.bus.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            from .gpio import SensorGPIO
+            self.gpio = SensorGPIO(gpio_chip, rst_gpio, int_gpio)
         except Exception:
             self.bus.close()
             raise
@@ -21,7 +24,12 @@ class ShtpI2C:
         self.tx_sequence = [0] * 6
 
     def close(self):
-        self.bus.close()
+        try:
+            if self.gpio is not None:
+                self.gpio.close()
+                self.gpio = None
+        finally:
+            self.bus.close()
 
     def read_bytes(self, size):
         msg = self.message.read(self.address, size)
@@ -34,6 +42,9 @@ class ShtpI2C:
         self.tx_sequence[channel] = (self.tx_sequence[channel] + 1) & 255
 
     def receive(self):
+        # Level check also sees INT already LOW at startup; no lost-edge wait.
+        if not self.gpio.ready():
+            return None
         first = self.read_bytes(4)
         length, channel, sequence, continuation = header(first)
         if length == 0:
@@ -48,8 +59,9 @@ class ShtpI2C:
         return channel, sequence, data[4:]
 
     def configure(self, rate_hz, mag_rate_hz):
-        self.send(1, b'\x01')  # executable channel: soft reset
-        time.sleep(0.3)
+        self.gpio.reset()
+        self.tx_sequence = [0] * 6
+        self.gpio.wait_ready(2.0)
         # Drain boot advertisements/reset notifications, never expose them as measurements.
         deadline = time.monotonic() + 2.0
         while self.receive() is not None:
