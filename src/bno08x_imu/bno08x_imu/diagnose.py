@@ -5,10 +5,9 @@ for the production driver. GPIO polling is not an oscilloscope/edge recorder.
 """
 import argparse
 import json
-import struct
 import time
 
-from .protocol import ProtocolError, header
+from .protocol import ProtocolError, decode_product_id, header
 from .transport import ShtpI2C
 
 
@@ -128,9 +127,7 @@ class Diagnostic:
                 continue
             channel, sequence, payload = item
             if channel == 2 and len(payload) == 16 and payload[0] == 0xF8:
-                _, cause, major, minor, part, build, patch, _ = struct.unpack('<BBBBIIHH', payload)
-                result['product_id'] = dict(reset_cause=cause, version=f'{major}.{minor}.{patch}',
-                                            software_part=part, software_build=build)
+                result['product_id'] = decode_product_id(payload)
                 self.emit('VALID SH-2 Product ID: ' + json.dumps(result['product_id']))
                 break
         if result['product_id'] is None:

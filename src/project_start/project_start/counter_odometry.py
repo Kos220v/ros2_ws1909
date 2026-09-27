@@ -1,4 +1,4 @@
-"""Synchronized VESC-counter/BNO086 local odometry; sole odom->base_link TF owner."""
+"""Synchronized VESC-counter/BNO085 local odometry; sole odom->base_link TF owner."""
 import math
 import time
 import rclpy
@@ -119,7 +119,7 @@ class CounterOdometryNode(Node):
             rate_cov = [msg.angular_velocity_covariance[i] for i in (0, 4, 8)]
             if any(not math.isfinite(v) or v <= 0 for v in orientation_cov+rate_cov):
                 raise OdometryError('IMU covariance must be positive and finite')
-            # Conservative for the isotropic BNO086 covariances; account for tilt
+            # Conservative for the isotropic BNO085 covariances; account for tilt
             # amplification of the Euler yaw rate and host timing uncertainty.
             yaw_var = max(orientation_cov)/math.cos(self.p['max_tilt'])**2
             yaw_var += (rate*self.p['timestamp_stddev'])**2
@@ -182,7 +182,7 @@ class CounterOdometryNode(Node):
 
     def diagnostics(self):
         status = DiagnosticStatus()
-        status.name = 'Counter + BNO086 odometry'
+        status.name = 'Counter + BNO085 odometry'
         status.hardware_id = 'tracked_robot'
         status.level = DiagnosticStatus.ERROR if self.fault else (
             DiagnosticStatus.OK if self.last_result else DiagnosticStatus.WARN)

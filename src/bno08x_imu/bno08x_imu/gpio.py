@@ -35,16 +35,16 @@ class SensorGPIO:
                     raise ValueError(f'{self.path} line {offset} is {name!r}, not GPIO{offset}')
             if self.v2:
                 from gpiod.line import Direction, Value, Bias
-                self.request = gpiod.request_lines(self.path, consumer='bno086_imu', config={
+                self.request = gpiod.request_lines(self.path, consumer='bno08x_imu', config={
                     interrupt: gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.PULL_UP),
                     rst: gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.ACTIVE),
                 })
             else:
                 self.interrupt = self.chip.get_line(interrupt)
-                self.interrupt.request(consumer='bno086_imu', type=gpiod.LINE_REQ_DIR_IN,
+                self.interrupt.request(consumer='bno08x_imu', type=gpiod.LINE_REQ_DIR_IN,
                                        flags=gpiod.LINE_REQ_FLAG_BIAS_PULL_UP)
                 self.rst = self.chip.get_line(rst)
-                self.rst.request(consumer='bno086_imu', type=gpiod.LINE_REQ_DIR_OUT,
+                self.rst.request(consumer='bno08x_imu', type=gpiod.LINE_REQ_DIR_OUT,
                                  default_vals=[1])
         except Exception:
             self.close()
@@ -76,7 +76,7 @@ class SensorGPIO:
         deadline = time.monotonic() + timeout
         while not self.ready():
             if time.monotonic() >= deadline:
-                raise TimeoutError('BNO086 INT remained HIGH after hardware reset')
+                raise TimeoutError('BNO085 INT remained HIGH after hardware reset')
             time.sleep(0.001)
 
     def close(self):

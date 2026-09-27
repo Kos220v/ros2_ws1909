@@ -3,7 +3,7 @@ import sys
 from enum import Enum
 from types import SimpleNamespace
 import pytest
-from bno086_imu.gpio import SensorGPIO
+from bno08x_imu.gpio import SensorGPIO
 
 
 @pytest.fixture(params=[1, 2])
@@ -58,13 +58,13 @@ def backend(request, monkeypatch):
     monkeypatch.setitem(sys.modules, 'gpiod.line', SimpleNamespace(
         Value=Value, Direction=SimpleNamespace(INPUT=1, OUTPUT=2),
         Bias=SimpleNamespace(PULL_UP='up')))
-    monkeypatch.setattr('bno086_imu.gpio.glob.glob', lambda _: ['/dev/gpiochip7'])
+    monkeypatch.setattr('bno08x_imu.gpio.glob.glob', lambda _: ['/dev/gpiochip7'])
     return state
 
 
 def test_discovery_reset_levels_and_release(backend, monkeypatch):
     delays = []
-    monkeypatch.setattr('bno086_imu.gpio.time.sleep', delays.append)
+    monkeypatch.setattr('bno08x_imu.gpio.time.sleep', delays.append)
     gpio = SensorGPIO()
     assert gpio.path == '/dev/gpiochip7'
     assert backend.held == {17, 27}
@@ -103,7 +103,7 @@ def test_missing_int_timeout(backend, monkeypatch):
     gpio = SensorGPIO()
     backend.levels[27] = 1
     clock = iter([0., 3.])
-    monkeypatch.setattr('bno086_imu.gpio.time.monotonic', lambda: next(clock))
+    monkeypatch.setattr('bno08x_imu.gpio.time.monotonic', lambda: next(clock))
     with pytest.raises(TimeoutError, match='INT remained HIGH'):
         gpio.wait_ready(2.)
     gpio.close()
@@ -112,7 +112,7 @@ def test_missing_int_timeout(backend, monkeypatch):
 def test_reset_released_on_interrupted_sleep(backend, monkeypatch):
     gpio = SensorGPIO()
     def interrupted(_): raise KeyboardInterrupt()
-    monkeypatch.setattr('bno086_imu.gpio.time.sleep', interrupted)
+    monkeypatch.setattr('bno08x_imu.gpio.time.sleep', interrupted)
     with pytest.raises(KeyboardInterrupt):
         gpio.reset()
     assert backend.sets == [0, 1]

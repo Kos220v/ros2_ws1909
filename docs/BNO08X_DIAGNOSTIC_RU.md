@@ -1,6 +1,6 @@
-# Стендовая диагностика BNO086: RST, INT, I²C, Product ID
+# Стендовая диагностика BNO085: RST, INT, I²C, Product ID
 
-Утилита `bno086_imu.diagnose` **не является ROS-узлом**, не публикует IMU/TF,
+Утилита `bno08x_imu.diagnose` **не является ROS-узлом**, не публикует IMU/TF,
 не запускает навигацию и не включает отчёты движения. Рабочий драйвер сохраняет
 прежнюю защиту INT. Утилита намеренно выполняет диагностический обмен по I²C,
 даже если после reset не наблюдался INT LOW.
@@ -12,7 +12,7 @@
   `gpioset`, `i2cdetect` и любые другие клиенты этой шины.
 - Проводка: 3V3→пин1, GND→пин6, SDA→пин3, SCL→пин5,
   RST→GPIO17/пин11, INT→GPIO27/пин13. Только 3,3 В, PS0/PS1 открыты.
-- Права групп `i2c` и `gpio`, см. [инструкцию](BNO086_RASPBERRY_PI5_RU.md).
+- Права групп `i2c` и `gpio`, см. [инструкцию](BNO085_RASPBERRY_PI5_RU.md).
 - Утилита делает аппаратный reset **для каждого адреса**, уничтожая прежнее
   состояние IMU. После теста перезапускать весь стек на стоянке, не продолжать
   старую миссию и не объединять ориентации до/после сброса.
@@ -26,10 +26,10 @@ Cooperative flock защищает от второй копии нашего д�
 cd ~/ros2_ws
 sudo apt install python3-smbus2 python3-libgpiod
 set -o pipefail
-PYTHONPATH="$PWD/src/bno086_imu" /usr/bin/python3 -u -m bno086_imu.diagnose \
+PYTHONPATH="$PWD/src/bno08x_imu" /usr/bin/python3 -u -m bno08x_imu.diagnose \
   --confirm-stationary --i2c-bus 1 --gpio-chip auto \
   --rst-gpio 17 --int-gpio 27 \
-  2>&1 | tee "$HOME/bno086-diagnostic.log"
+  2>&1 | tee "$HOME/bno08x-diagnostic.log"
 ```
 
 Параметры по умолчанию проверяют **0x4A, затем 0x4B**, с отдельным сбросом перед
@@ -40,9 +40,9 @@ PYTHONPATH="$PWD/src/bno086_imu" /usr/bin/python3 -u -m bno086_imu.diagnose \
 Альтернативный запуск после сборки пакета:
 
 ```bash
-colcon build --symlink-install --packages-select bno086_imu
+colcon build --symlink-install --packages-select bno08x_imu
 source install/setup.bash
-ros2 run bno086_imu bno086_diagnose --confirm-stationary --i2c-bus 1
+ros2 run bno08x_imu bno08x_diagnose --confirm-stationary --i2c-bus 1
 ```
 
 Не передавать `--ros-args`: это обычная CLI, параметры разбирает argparse.
@@ -88,6 +88,6 @@ ros2 run bno086_imu bno086_diagnose --confirm-stationary --i2c-bus 1
 
 Коды выхода: 0 — хотя бы один корректный Product ID; 1 — ни одного;
 2 — ошибка аргументов/инициализации/выполнения; 130 — Ctrl+C.
-Передать для анализа **весь** `~/bno086-diagnostic.log`, не только SUMMARY.
+Передать для анализа **весь** `~/bno08x-diagnostic.log`, не только SUMMARY.
 
-Проверено офлайн на fake GPIO/I²C, не на реальном BNO086/Pi 5.
+Проверено офлайн на fake GPIO/I²C, не на реальном BNO085/Pi 5.

@@ -6,7 +6,7 @@ Signed displacement: unwrapped tachometer * calibrated meters/count.
 Total track travel: unwrapped tachometer_abs * calibrated meters/count.
 No RPM/speed integration is used for these distances. /odom/vesc publishes
 only measured vx; scalar track distance must NOT masquerade as Cartesian x.
-counter_odometry estimates local XY directly from timestamped ticks + BNO086.
+counter_odometry estimates local XY directly from timestamped ticks + BNO085.
 robot_localization provides GNSS-corrected map localization.
 """
 
@@ -447,7 +447,7 @@ class KolesaControl(Node):
         /odom/vesc: ТОЛЬКО линейная скорость центра робота.
 
         Поза и угловая скорость не измеряются (ковариация 1e6). Курс даёт
-        BNO086; локальные X/Y считает counter_odometry из /kolesa/track_* + IMU.
+        BNO085; локальные X/Y считает counter_odometry из /kolesa/track_* + IMU.
         """
         left = self.wheels["left"]
         right = self.wheels["right"]

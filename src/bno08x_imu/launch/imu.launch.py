@@ -1,4 +1,4 @@
-"""Standalone BNO086 I2C bringup. Do not also run hardware start.launch.py."""
+"""Standalone BNO085 I2C bringup. Do not also run hardware start.launch.py."""
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -9,7 +9,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    share = get_package_share_directory('bno086_imu')
+    share = get_package_share_directory('bno08x_imu')
     args = [DeclareLaunchArgument('params_file', default_value=os.path.join(share, 'config', 'imu.yaml')),
             DeclareLaunchArgument('gpio_chip', default_value='auto'),
             DeclareLaunchArgument('rst_gpio', default_value='17'),
@@ -17,7 +17,7 @@ def generate_launch_description():
             DeclareLaunchArgument('i2c_bus', default_value='1'),
             DeclareLaunchArgument('i2c_address', default_value='75'),
             DeclareLaunchArgument('declination_deg', default_value='0.0')]
-    node = Node(package='bno086_imu', executable='imu_node', name='bno086_imu', namespace='imu',
+    node = Node(package='bno08x_imu', executable='imu_node', name='bno08x_imu', namespace='imu',
                 output='screen', respawn=False,
                 parameters=[LaunchConfiguration('params_file'), {
                     'gpio_chip': ParameterValue(LaunchConfiguration('gpio_chip'), value_type=str),

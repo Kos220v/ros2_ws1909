@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import pytest
 
-SOURCE = Path(__file__).resolve().parents[1] / 'bno086_imu/node.py'
+SOURCE = Path(__file__).resolve().parents[1] / 'bno08x_imu/node.py'
 
 
 def method(name):

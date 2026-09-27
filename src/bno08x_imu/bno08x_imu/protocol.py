@@ -94,3 +94,12 @@ def true_enu_quaternion(q, declination_deg):
     angle = -math.radians(declination_deg) / 2.0
     s, c = math.sin(angle), math.cos(angle)
     return (c*x - s*y, c*y + s*x, c*z + s*w, c*w - s*z)
+
+
+def decode_product_id(payload):
+    """SH-2 Product ID shared by BNO085/BNO086; not a silicon model detector."""
+    if len(payload) != 16 or payload[0] != 0xF8:
+        raise ProtocolError('Expected a 16-byte SH-2 Product ID response (0xF8)')
+    _, cause, major, minor, part, build, patch, _ = struct.unpack('<BBBBIIHH', payload)
+    return dict(reset_cause=cause, version=f'{major}.{minor}.{patch}',
+                software_part=part, software_build=build)

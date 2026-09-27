@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>bno086_imu</name>
-  <version>0.1.0</version>
-  <description>SparkFun BNO086 Qwiic I2C IMU for ENU GPS navigation.</description>
+  <name>bno08x_imu</name>
+  <version>0.2.0</version>
+  <description>BNO085 SH-2/SHTP I2C IMU for ENU GPS navigation.</description>
   <maintainer email="admin@example.com">admin</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_python</buildtool_depend>

@@ -1,7 +1,7 @@
-/**/bno086_imu:
+/**/bno08x_imu:
   ros__parameters:
     i2c_bus: 1
-    i2c_address: 75                  # SparkFun default 0x4B; alternative 74 = 0x4A
+    i2c_address: 75                  # Confirm against the working Arduino sketch: 75=0x4B or 74=0x4A
     gpio_chip: auto                  # discover pinctrl-rp1, never assume gpiochip4
     rst_gpio: 17                     # BCM17 / physical pin 11; output, idle HIGH
     int_gpio: 27                     # BCM27 / physical pin 13; input, ready LOW

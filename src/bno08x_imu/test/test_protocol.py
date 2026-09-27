@@ -2,7 +2,7 @@
 import math
 import struct
 import pytest
-from bno086_imu.protocol import (
+from bno08x_imu.protocol import (
     ACCEL, GYRO, MAG, ROTATION, ProtocolError, decode_reports,
     header, packet, set_feature, true_enu_quaternion,
 )

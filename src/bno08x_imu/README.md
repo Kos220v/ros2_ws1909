@@ -1,18 +1,18 @@
-# bno086_imu — ROS 2 Jazzy / SparkFun VR IMU BNO086 Qwiic
+# bno08x_imu — ROS 2 Jazzy / BNO085 по I²C
 
-Linux I²C (`smbus2.I2C_RDWR`), стандартный адрес SparkFun **0x4B**, 3.3 В.
+Linux I²C (`smbus2.I2C_RDWR`), адрес конфигурации **0x4B** (не подтверждён для новой платы; сверить с Arduino), 3.3 В.
 Подключение Raspberry Pi 5: 3V3 → физический pin 1, GND → pin 6,
 SDA → GPIO2/pin 3, SCL → GPIO3/pin 5, **RST → GPIO17/pin 11,
 INT → GPIO27/pin 13** (только если GPIO свободны). Не подключать к 5 В.
 
-**Полная инструкция в репозитории: [`docs/BNO086_RASPBERRY_PI5_RU.md`](../../docs/BNO086_RASPBERRY_PI5_RU.md).**
+**Полная инструкция в репозитории: [`docs/BNO085_RASPBERRY_PI5_RU.md`](../../docs/BNO085_RASPBERRY_PI5_RU.md).**
 
 ```bash
 sudo apt install python3-smbus2 python3-libgpiod gpiod i2c-tools
 # Сначала включить I²C и настроить права по полной инструкции.
-colcon build --symlink-install --packages-select bno086_imu
+colcon build --symlink-install --packages-select bno08x_imu
 source install/setup.bash
-ros2 launch bno086_imu imu.launch.py i2c_bus:=1 i2c_address:=75 declination_deg:=0.0
+ros2 launch bno08x_imu imu.launch.py i2c_bus:=1 i2c_address:=75 declination_deg:=0.0
 # Склонение 0.0 заменить местным; не запускать одновременно с project_start!
 ```
 
@@ -45,7 +45,7 @@ Quaternion SH-2 `(i,j,k,real)` считается sensor→magnetic ENU. Ист�
 Источники wire-формата, сверенные при реализации (не включены в пакет):
 - [CEVA SH-2 sensor decoding](https://github.com/ceva-dsp/sh2/blob/master/sh2_SensorValue.c)
 - [SparkFun BNO08x I²C HAL](https://github.com/sparkfun/SparkFun_BNO08x_Arduino_Library)
-- [SparkFun BNO086 hardware](https://docs.sparkfun.com/SparkFun_VR_IMU_Breakout_BNO086_QWIIC/hardware_overview/)
+- [CEVA BNO08x datasheet](https://www.ceva-ip.com/wp-content/uploads/BNO080_085-Datasheet.pdf)
 
 Тесты используют искусственные пакеты и fake-I²C, не физическую плату.
 Реальные I²C timing, оси, магнитную калибровку и реакции на отказы необходимо
@@ -66,9 +66,18 @@ RST и raw SHTP/Product ID проверкой даже при INT HIGH:
 
 ```bash
 # Из корня workspace, моторы отключены, остальные клиенты остановлены:
-PYTHONPATH="$PWD/src/bno086_imu" /usr/bin/python3 -u -m bno086_imu.diagnose \
+PYTHONPATH="$PWD/src/bno08x_imu" /usr/bin/python3 -u -m bno08x_imu.diagnose \
   --confirm-stationary --i2c-bus 1
 ```
 
-[Подробности и сохранение лога](../../docs/BNO086_DIAGNOSTIC_RU.md).
+[Подробности и сохранение лога](../../docs/BNO08X_DIAGNOSTIC_RU.md).
 Утилита ничего не публикует; результат не разрешает автономное движение.
+
+
+Пакет переименован из `bno086_imu` в `bno08x_imu`; рабочий датчик проекта —
+**BNO085**. Используется общий протокол SH-2/SHTP, не эмуляция отсутствующей IMU.
+100 кГц задаётся ядром Raspberry Pi: `dtparam=i2c_arm_baudrate=100000`,
+а не `rate_hz` (это частота отчётов, 25 Гц). Шаблон: `config/pi5_i2c_100khz.txt`.
+Product ID/версия прошивки выводятся при старте и в diagnostics; это не автоматическое
+определение модели кремния. Начальный INT timeout по-прежнему запрещает запуск.
+Адрес из рабочего Arduino-скетча нужно явно перенести: `i2c_address:=74` или `75`.

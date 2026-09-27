@@ -1,6 +1,6 @@
 from dataclasses import replace
-from bno086_imu.protocol import ACCEL, GYRO, ROTATION, Report
-from bno086_imu.samples import Samples
+from bno08x_imu.protocol import ACCEL, GYRO, ROTATION, Report
+from bno08x_imu.samples import Samples
 
 
 def report(sensor, seq=1):

@@ -14,7 +14,7 @@
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>kolesa_control</exec_depend>
 
-  <exec_depend>bno086_imu</exec_depend>
+  <exec_depend>bno08x_imu</exec_depend>
   <exec_depend>elrs_receiver</exec_depend>
   <exec_depend>cmd_switcher</exec_depend>
   <exec_depend>relay_reliable</exec_depend>

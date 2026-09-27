@@ -1,4 +1,4 @@
-"""BNO086 ROS 2 node. No synthetic IMU heartbeats after a stopped sensor stream."""
+"""BNO085 ROS 2 node. No synthetic IMU heartbeats after a stopped sensor stream."""
 import math
 import time
 import rclpy
@@ -18,9 +18,9 @@ def covariance(stddev):
     return [v, 0.0, 0.0, 0.0, v, 0.0, 0.0, 0.0, v]
 
 
-class Bno086Node(Node):
+class Bno08xNode(Node):
     def __init__(self):
-        super().__init__('bno086_imu')
+        super().__init__('bno08x_imu')
         defaults = dict(
             i2c_bus=1, i2c_address=0x4B, frame_id='imu_link',
             gpio_chip='auto', rst_gpio=17, int_gpio=27,
@@ -48,7 +48,8 @@ class Bno086Node(Node):
         try:
             self.transport = ShtpI2C(self.p['i2c_bus'], self.p['i2c_address'],
                                      self.p['gpio_chip'], self.p['rst_gpio'], self.p['int_gpio'])
-            self.transport.configure(self.p['rate_hz'], self.p['mag_rate_hz'])
+            self.product_id = self.transport.configure(self.p['rate_hz'], self.p['mag_rate_hz'])
+            self.get_logger().info(f'SH-2 Product ID: {self.product_id}')
         except Exception:
             self.close()
             raise
@@ -57,7 +58,7 @@ class Bno086Node(Node):
         self.create_timer(0.01, self.poll)
         self.create_timer(1.0, self.diagnostics)
         self.get_logger().info(
-            f"BNO086 /dev/i2c-{self.p['i2c_bus']} address 0x{self.p['i2c_address']:02x}; "
+            f"BNO085 /dev/i2c-{self.p['i2c_bus']} address 0x{self.p['i2c_address']:02x}; "
             'waiting for fresh calibrated accel/gyro/Rotation Vector reports')
 
     def validate(self):
@@ -115,7 +116,7 @@ class Bno086Node(Node):
                 break
             channel, sequence, payload = item
             if channel == 1 and payload[:1] == b'\x01':
-                raise ProtocolError('BNO086 reset at runtime: reinitialization required')
+                raise ProtocolError('BNO085 reset at runtime: reinitialization required')
             if channel not in (3, 4):
                 continue  # advertisements / feature acknowledgements / control
             if self.last_sequences.get(channel) == sequence:
@@ -178,7 +179,7 @@ class Bno086Node(Node):
     def diagnostics(self):
         now = time.monotonic()
         status = DiagnosticStatus()
-        status.name = 'BNO086 IMU'
+        status.name = 'BNO085 IMU'
         status.hardware_id = f"i2c-{self.p['i2c_bus']}:0x{self.p['i2c_address']:02x}"
         healthy = self.fault_reason is None and now - self.last_published <= self.p['sample_max_age']
         status.level = DiagnosticStatus.OK if healthy else DiagnosticStatus.WARN
@@ -186,12 +187,14 @@ class Bno086Node(Node):
         if self.fault_reason is not None:
             status.level = DiagnosticStatus.ERROR
             status.message = 'IMU fault latched: ' + self.fault_reason
+        status.values = [KeyValue(key='sh2_' + k, value=str(v))
+                         for k, v in self.product_id.items()]
         if ROTATION in self.samples.latest:
             report, received = self.samples.latest[ROTATION]
             values = dict(rotation_accuracy=report.accuracy,
                           heading_error_rad=report.heading_accuracy,
                           rotation_age_s=round(now-received, 3))
-            status.values = [KeyValue(key=k, value=str(v)) for k, v in values.items()]
+            status.values.extend(KeyValue(key=k, value=str(v)) for k, v in values.items())
         array = DiagnosticArray()
         array.header.stamp = self.get_clock().now().to_msg()
         array.status = [status]
@@ -211,7 +214,7 @@ def main(args=None):
     node = None
     code = 0
     try:
-        node = Bno086Node()
+        node = Bno08xNode()
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
@@ -220,7 +223,7 @@ def main(args=None):
         if node is not None:
             node.get_logger().error(f'IMU stopped: {error}; explicit stationary restart required')
         else:
-            print(f'BNO086 initialization failed: {error}', flush=True)
+            print(f'BNO085 initialization failed: {error}', flush=True)
     finally:
         if node is not None:
             node.close()

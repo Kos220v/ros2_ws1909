@@ -10,21 +10,21 @@ def test_old_package_removed_and_new_dependency_declared():
     assert not (ROOT / 'src/imu_stm32_bridge').exists()
     manifest = ET.parse(ROOT / 'src/project_start/package.xml')
     deps = [node.text for node in manifest.findall('.//exec_depend')]
-    assert 'bno086_imu' in deps
+    assert 'bno08x_imu' in deps
     assert 'imu_stm32_bridge' not in deps
 
 
 def test_imu_defaults_and_launch_contract():
-    package = ROOT / 'src/bno086_imu'
-    config = yaml.safe_load((package / 'config/imu.yaml').read_text())['/**/bno086_imu']['ros__parameters']
+    package = ROOT / 'src/bno08x_imu'
+    config = yaml.safe_load((package / 'config/imu.yaml').read_text())['/**/bno08x_imu']['ros__parameters']
     assert config['i2c_address'] == 0x4B
     assert config['frame_id'] == 'imu_link'
     assert config['min_accuracy'] >= 2
     assert config['sample_max_age'] <= .2
-    assert (package / 'resource/bno086_imu').exists()
+    assert (package / 'resource/bno08x_imu').exists()
     assert (package / 'README.md').exists()
     start = (ROOT / 'src/project_start/launch/start.launch.py').read_text()
-    assert "package='bno086_imu'" in start
+    assert "package='bno08x_imu'" in start
     assert 'imu_port' not in start
     assert 'imu_i2c_bus' in start and 'imu_i2c_address' in start
 
@@ -49,8 +49,8 @@ def test_sensor_frame_exists_in_urdf():
 
 def test_required_gpio_and_no_silent_respawn():
     import ast
-    package = ROOT / 'src/bno086_imu'
-    cfg = yaml.safe_load((package / 'config/imu.yaml').read_text())['/**/bno086_imu']['ros__parameters']
+    package = ROOT / 'src/bno08x_imu'
+    cfg = yaml.safe_load((package / 'config/imu.yaml').read_text())['/**/bno08x_imu']['ros__parameters']
     assert (cfg['gpio_chip'], cfg['rst_gpio'], cfg['int_gpio']) == ('auto', 17, 27)
     assert 'python3-libgpiod' in (package / 'package.xml').read_text()
     for path, prefix in [(package / 'launch/imu.launch.py', ''),
@@ -59,7 +59,7 @@ def test_required_gpio_and_no_silent_respawn():
         node = next(n for n in ast.walk(tree) if isinstance(n, ast.Call)
                     and isinstance(n.func, ast.Name) and n.func.id == 'Node'
                     and any(k.arg == 'package' and isinstance(k.value, ast.Constant)
-                            and k.value.value == 'bno086_imu' for k in n.keywords))
+                            and k.value.value == 'bno08x_imu' for k in n.keywords))
         assert next(k.value.value for k in node.keywords if k.arg == 'respawn') is False
         for key in ('gpio_chip', 'rst_gpio', 'int_gpio'):
             assert prefix + key in path.read_text()

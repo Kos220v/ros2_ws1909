@@ -1,8 +1,8 @@
 from collections import deque
 from types import SimpleNamespace
 import pytest
-from bno086_imu.protocol import ProtocolError, packet
-from bno086_imu.transport import ShtpI2C
+from bno08x_imu.protocol import ProtocolError, packet
+from bno08x_imu.transport import ShtpI2C
 
 
 def transport(reads):
@@ -76,7 +76,7 @@ def test_read_uses_raw_i2c_rdwr():
 
 
 def test_configure_reset_identification_and_four_reports(monkeypatch):
-    monkeypatch.setattr('bno086_imu.transport.time.sleep', lambda _: None)
+    monkeypatch.setattr('bno08x_imu.transport.time.sleep', lambda _: None)
     driver = object.__new__(ShtpI2C)
     actions = []
     driver.gpio = SimpleNamespace(reset=lambda: actions.append("reset"),
@@ -85,7 +85,8 @@ def test_configure_reset_identification_and_four_reports(monkeypatch):
     driver.receive = lambda: incoming.popleft()
     writes = []
     driver.send = lambda channel, payload: writes.append((channel, payload))
-    driver.configure(25, 10)
+    product = driver.configure(25, 10)
+    assert product == dict(reset_cause=0, version='0.0.0', software_part=0, software_build=0)
     assert actions == ['reset', 2.0]
     assert writes[:1] == [(2, b'\xf9\x00')]
     assert [p[1] for _, p in writes[1:]] == [1, 2, 5, 3]
@@ -112,11 +113,11 @@ def test_failed_gpio_acquisition_closes_bus(monkeypatch):
     calls = []
     bus = SimpleNamespace(fd=123, close=lambda: calls.append('closed'))
     monkeypatch.setitem(sys.modules, 'smbus2', SimpleNamespace(SMBus=lambda _: bus, i2c_msg=None))
-    monkeypatch.setattr('bno086_imu.transport.fcntl.flock', lambda *_: calls.append('lock'))
+    monkeypatch.setattr('bno08x_imu.transport.fcntl.flock', lambda *_: calls.append('lock'))
     def unavailable(*args):
         calls.append('gpio')
         raise PermissionError('GPIO access denied')
-    monkeypatch.setattr('bno086_imu.gpio.SensorGPIO', unavailable)
+    monkeypatch.setattr('bno08x_imu.gpio.SensorGPIO', unavailable)
     with pytest.raises(PermissionError):
         ShtpI2C(1, 75)
     assert calls == ['lock', 'gpio', 'closed']
@@ -128,8 +129,8 @@ def test_bus_lock_failure_never_touches_gpio(monkeypatch):
     bus = SimpleNamespace(fd=123, close=lambda: calls.append('closed'))
     monkeypatch.setitem(sys.modules, 'smbus2', SimpleNamespace(SMBus=lambda _: bus, i2c_msg=None))
     def busy(*args): raise BlockingIOError('busy bus')
-    monkeypatch.setattr('bno086_imu.transport.fcntl.flock', busy)
-    monkeypatch.setattr('bno086_imu.gpio.SensorGPIO', lambda *_: calls.append('unexpected GPIO'))
+    monkeypatch.setattr('bno08x_imu.transport.fcntl.flock', busy)
+    monkeypatch.setattr('bno08x_imu.gpio.SensorGPIO', lambda *_: calls.append('unexpected GPIO'))
     with pytest.raises(BlockingIOError):
         ShtpI2C(1, 75)
     assert calls == ['closed']
@@ -153,7 +154,7 @@ def test_product_id_timeout(monkeypatch):
     writes = []
     driver.send = lambda *args: writes.append(args)
     clock = iter([0., 0., 3.])
-    monkeypatch.setattr('bno086_imu.transport.time.monotonic', lambda: next(clock))
+    monkeypatch.setattr('bno08x_imu.transport.time.monotonic', lambda: next(clock))
     with pytest.raises(TimeoutError, match='Product ID'):
         driver.configure(25, 10)
     assert writes == [(2, b'\xf9\x00')]

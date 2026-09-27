@@ -7,7 +7,7 @@ ROS 2 Jazzy).
 
 Распределение UART:
     uart0  /dev/ttyAMA0  — приёмник ELRS (пульт)
-    I2C1  /dev/i2c-1    — BNO086 Qwiic (0x4B), GPIO2/GPIO3
+    I2C1  /dev/i2c-1    — BNO085 Qwiic (0x4B), GPIO2/GPIO3
     uart2  /dev/ttyAMA2  — GPS (NMEA)
     uart3  /dev/ttyAMA3  — VESC левый  (kolesa_control)
     uart4  /dev/ttyAMA4  — VESC правый (kolesa_control)
@@ -16,7 +16,7 @@ ROS 2 Jazzy).
 Запускает:
     elrs_receiver        пульт ELRS       -> /cmd_vel/manual, /control_mode
     kolesa_control       2×VESC (FS75100) <- /cmd_vel, -> /odom/vesc (скорость)
-    bno086_imu           BNO086 I2C        -> /imu/data (кватернион ENU, гироскоп)
+    bno08x_imu           BNO085 I2C        -> /imu/data (кватернион ENU, гироскоп)
     Локализация запускается отдельно: localization.launch.py (counter_odometry + GPS EKF).
     nmea_navsat_driver   GNSS             -> /gps/fix
     robot_state_publisher  URDF           -> статические TF base_link -> датчики
@@ -52,7 +52,7 @@ def _first_existing(*paths):
 
 def launch_setup(context, *args, **kwargs):
     project_start_share = get_package_share_directory('project_start')
-    imu_share = get_package_share_directory('bno086_imu')
+    imu_share = get_package_share_directory('bno08x_imu')
 
     # ---------------------------------------------------------------- порты
     # Жёстко зафиксированные UART на Raspberry Pi 5 (см. config.txt / оверлеи)
@@ -160,11 +160,11 @@ def launch_setup(context, *args, **kwargs):
         }],
     )
 
-    # BNO086: обязательные RST/INT; без respawn, reset меняет состояние курса.
-    # ------------------------------------------------------- BNO086 по I2C
+    # BNO085: обязательные RST/INT; без respawn, reset меняет состояние курса.
+    # ------------------------------------------------------- BNO085 по I2C
     imu_params = os.path.join(imu_share, 'config', 'imu.yaml')
     imu_node = Node(
-        package='bno086_imu', executable='imu_node', name='bno086_imu',
+        package='bno08x_imu', executable='imu_node', name='bno08x_imu',
         namespace='imu', output='screen', respawn=False,
         parameters=[imu_params, {
             'gpio_chip': ParameterValue(LaunchConfiguration('imu_gpio_chip'), value_type=str),
@@ -259,9 +259,9 @@ def generate_launch_description():
         DeclareLaunchArgument('imu_rst_gpio', default_value='17'),
         DeclareLaunchArgument('imu_int_gpio', default_value='27'),
         DeclareLaunchArgument('imu_i2c_bus', default_value='1',
-                              description='Номер шины /dev/i2c-N для BNO086'),
+                              description='Номер шины /dev/i2c-N для BNO085'),
         DeclareLaunchArgument('imu_i2c_address', default_value='75',
-                              description='Адрес BNO086: 75=0x4B, 74=0x4A'),
+                              description='Адрес BNO085: 75=0x4B, 74=0x4A'),
         DeclareLaunchArgument('lidar_port', default_value='/dev/ttyUSB0',
                               description='Порт лидара (USB, по умолчанию /dev/ttyUSB0)'),
         DeclareLaunchArgument('declination_deg', default_value='0.0',

@@ -3,8 +3,8 @@ from collections import deque
 from types import SimpleNamespace
 import struct
 import pytest
-from bno086_imu import diagnose
-from bno086_imu.protocol import packet, ProtocolError
+from bno08x_imu import diagnose
+from bno08x_imu.protocol import packet, ProtocolError
 
 
 class Clock:

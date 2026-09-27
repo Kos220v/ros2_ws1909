@@ -1,4 +1,4 @@
-# Local pose: hardware counter increments + BNO086, NOT a velocity-integrating EKF.
+# Local pose: hardware counter increments + BNO085, NOT a velocity-integrating EKF.
 # Global EKF: local vx + absolute IMU + GNSS; no local pose double fusion.
 ekf_global:
   ros__parameters:

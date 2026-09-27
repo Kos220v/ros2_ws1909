@@ -3,7 +3,7 @@
 ## 1. Что реализовано и где границы применимости
 
 Целевая платформа из исходного проекта: Ubuntu 24.04 / ROS 2 **Jazzy**, Raspberry Pi 5,
-гусеничное дифференциальное шасси, два VESC, BNO086 Qwiic (I²C), NMEA GNSS и 2D YDLIDAR.
+гусеничное дифференциальное шасси, два VESC, BNO085 Qwiic (I²C), NMEA GNSS и 2D YDLIDAR.
 Для другого дистрибутива параметры и названия плагинов нужно проверить заново.
 
 Робот получает **упорядоченный список GPS-точек WGS84**, преобразует их в `map`
@@ -70,7 +70,7 @@ controller_server / behavior_server
 | `src/project_start/launch/start.launch.py` | Драйверы, URDF/TF датчиков, пульт, mux |
 | `src/project_start/launch/localization.launch.py` | counter_odometry, глобальный EKF и navsat_transform |
 | `src/project_start/config/localization.yaml` | Настройка локализации |
-| `src/bno086_imu/config/imu.yaml` | I²C, обязательные RST/INT, частоты, качество BNO086 и склонение |
+| `src/bno08x_imu/config/imu.yaml` | I²C, обязательные RST/INT, частоты, качество BNO085 и склонение |
 | `src/project_start/launch/navigation.launch.py` | Nav2, lifecycle manager, защитный gate |
 | `src/project_start/config/nav2.yaml` | Параметры всех используемых компонентов Nav2 |
 | `src/project_start/behavior_trees/gps_navigation.xml` | Перепланирование и ограниченные recovery |
@@ -79,7 +79,7 @@ controller_server / behavior_server
 | `src/cmd_switcher/cmd_switcher/policy.py` | Проверяемые правила выбора источника команд |
 
 Ссылка на отсутствовавший `robot_odom` удалена. Локальный EKF заменён узлом
-`counter_odometry`: X/Y считаются по приращениям аппаратных счётчиков и BNO086,
+`counter_odometry`: X/Y считаются по приращениям аппаратных счётчиков и BNO085,
 а не повторным интегрированием скорости. Подробнее: [ODOMETRY_RU.md](ODOMETRY_RU.md). Старые аргументы
 `odom_publish_tf`, `odom_yaw_mode`, `imu_yaw_offset_deg` больше не используются.
 Старую индивидуальную поправку `-48°` нельзя автоматически переносить: физический
@@ -123,7 +123,7 @@ ls -l /dev/ttyAMA* /dev/ttyUSB*
 правый VESC=AMA4, лидар=/dev/ttyUSB0. IMU: `/dev/i2c-1`, адрес 0x4B (75).
 Порты ELRS/VESC заданы в start.launch.py; GPS/лидар и номер шины/адрес IMU
 можно переопределять launch-аргументами. Настройка I²C и права группы i2c
-описаны в [инструкции BNO086](BNO086_RASPBERRY_PI5_RU.md).
+описаны в [инструкции BNO085](BNO085_RASPBERRY_PI5_RU.md).
 В каждом терминале загружайте оба `setup.bash`.
 
 ## 4. TF, IMU, одометрия и GNSS — настроить до Nav2
@@ -160,13 +160,13 @@ TF антенны нужен для компенсации смещения GPS 
 - юг: yaw ≈ −π/2;
 - поворот влево: `angular_velocity.z > 0`.
 
-Драйвер `bno086_imu` использует **Rotation Vector (0x05)** — fusion
+Драйвер `bno08x_imu` использует **Rotation Vector (0x05)** — fusion
 акселерометра, гироскопа и магнитометра. Game Rotation Vector не используется:
 он не даёт абсолютного курса для GPS. Вход SH-2 — quaternion `(i,j,k,real)`
 в магнитной ENU; выход `/imu/data` — `(x,y,z,w)` в истинной ENU.
 Проверить на реальной плате все четыре направления обязательно.
 
-Восточное магнитное склонение `declination_deg` задаётся **только драйверу BNO086**.
+Восточное магнитное склонение `declination_deg` задаётся **только драйверу BNO085**.
 Для магнитного ENU-пространства реализовано `yaw_true = yaw_magnetic - D`:
 магнитный север при D=+10° имеет истинный ENU yaw +80°. Это вращение мировой
 системы, не физического монтажа. В `navsat_transform` оставить
@@ -174,22 +174,22 @@ TF антенны нужен для компенсации смещения GPS 
 исказит маршрут. При замене старого датчика перезапустить counter_odometry, глобальный EKF и navsat.
 
 Калибровка, параметры I²C, проверка осей и допустимость магнитного окружения
-описаны в [BNO086_RASPBERRY_PI5_RU.md](BNO086_RASPBERRY_PI5_RU.md).
-BNO086 не устраняет помехи VESC/стальных элементов: испытать курс с включёнными
+описаны в [BNO085_RASPBERRY_PI5_RU.md](BNO085_RASPBERRY_PI5_RU.md).
+BNO085 не устраняет помехи VESC/стальных элементов: испытать курс с включёнными
 приводами и лидаром. При постоянном искажении поля нужна другая установка IMU
 или двухантенный GNSS heading. Не обнулять yaw относительно старта для GPS.
 
-Проверка параметров: `ros2 param get /imu/bno086_imu min_accuracy`.
+Проверка параметров: `ros2 param get /imu/bno08x_imu min_accuracy`.
 Без свежих accel/gyro/Rotation Vector и достаточного статуса точности драйвер
 не публикует `/imu/data`, а существующий navigation guard блокирует AUTO.
 Ускорение включает гравитацию, но в текущих EKF оно **не включено в fusion**;
-используются только yaw и wz. Дополнительный AHRS/Madgwick поверх BNO086 не нужен.
+используются только yaw и wz. Дополнительный AHRS/Madgwick поверх BNO085 не нужен.
 
 ### 4.3. Локальная одометрия и глобальный EKF
 
 Локальную `/odometry/local` и **единственный** TF `odom→base_link` публикует
 `counter_odometry`. На общей временной шкале интерполируются независимые счётчики
-левой/правой гусениц и yaw BNO086. Для каждого малого участка используются
+левой/правой гусениц и yaw BNO085. Для каждого малого участка используются
 приращение пути и точная формула дуги. По RPM, заданной скорости, duty и ускорению
 положение не интегрируется. Старый `ekf_local` больше не запускается.
 
@@ -636,16 +636,16 @@ ROS_DOMAIN_ID и совместимые QoS. Профиль предназнач
 
 ```bash
 python3 -m compileall -q src
-PYTHONPATH=src/project_start:src/cmd_switcher:src/bno086_imu:src/kolesa_control \
+PYTHONPATH=src/project_start:src/cmd_switcher:src/bno08x_imu:src/kolesa_control \
   python3 -m pytest -q src/project_start/test/test_navigation_safety.py \
-  src/cmd_switcher/test/test_policy.py src/bno086_imu/test \
+  src/cmd_switcher/test/test_policy.py src/bno08x_imu/test \
   src/kolesa_control/test src/project_start/test/test_counter_odometry.py \
   src/project_start/test/test_odometry_ros_adapter.py
 ```
 
 Эти тесты проверяют схему/числа маршрута, максимальную длину отрезков,
 свежесть/ковариации, fail-closed выбор режима и структуру YAML/BT, а также протокол
-SH-2/SHTP BNO086, единицы измерений, коррекцию склонения и свежесть IMU. Они не заменяют launch/action-тесты на ROS и испытания железа.
+SH-2/SHTP BNO085, единицы измерений, коррекцию склонения и свежесть IMU. Они не заменяют launch/action-тесты на ROS и испытания железа.
 
 Официальные справочники (выбирайте параметры именно Jazzy):
 
@@ -657,7 +657,7 @@ SH-2/SHTP BNO086, единицы измерений, коррекцию скло
 - https://docs.ros.org/en/jazzy/p/robot_localization/
 
 
-### Сбой и сброс BNO086 с RST/INT
+### Сбой и сброс BNO085 с RST/INT
 
 Драйвер использует RST (GPIO17/пин 11) и INT (GPIO27/пин 13), проверив отсутствие
 конфликта с UART/HAT. `start.launch.py` принимает `imu_gpio_chip`, `imu_rst_gpio`,

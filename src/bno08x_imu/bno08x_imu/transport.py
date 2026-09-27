@@ -1,7 +1,7 @@
 """Raw I2C_RDWR SHTP transport: no SMBus register/block-length protocol."""
 import time
 import fcntl
-from .protocol import ACCEL, GYRO, MAG, ROTATION, ProtocolError, header, packet, set_feature
+from .protocol import ACCEL, GYRO, MAG, ROTATION, ProtocolError, decode_product_id, header, packet, set_feature
 
 
 class ShtpI2C:
@@ -66,12 +66,13 @@ class ShtpI2C:
         deadline = time.monotonic() + 2.0
         while self.receive() is not None:
             if time.monotonic() >= deadline:
-                raise TimeoutError('BNO086 boot stream did not settle')
+                raise TimeoutError('BNO085 boot stream did not settle')
         self.send(2, b'\xf9\x00')  # Product ID request confirms SH-2 is running.
         deadline = time.monotonic() + 2.0
         while True:
             item = self.receive()
-            if item and item[0] == 2 and len(item[2]) >= 16 and item[2][0] == 0xF8:
+            if item and item[0] == 2 and item[2][:1] == b'\xf8':
+                product = decode_product_id(item[2])
                 break
             if time.monotonic() >= deadline:
                 raise TimeoutError('No SH-2 Product ID response')
@@ -79,3 +80,4 @@ class ShtpI2C:
         for sensor in (ACCEL, GYRO, ROTATION, MAG):
             self.send(2, set_feature(sensor, mag_rate_hz if sensor == MAG else rate_hz))
             time.sleep(0.01)
+        return product
