@@ -1,100 +1,54 @@
+"""Explicit mode gating: loss of manual commands never engages AUTO."""
+import math
+import time
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from rclpy.time import Time
+from std_msgs.msg import Int8
+from .policy import select_source
+
 
 class CmdMuxNode(Node):
     def __init__(self):
         super().__init__('cmd_mux_node')
-
-        # --- НАСТРОЙКИ ПРИОРИТЕТОВ (СЕКУНДЫ) ---
-        self.timeout_manual = 0.2       # Пульт (физический RC) — самый важный, реагирует мгновенно
-        self.timeout_app_manual = 0.3   # ДОБАВЛЕНО: ручное управление из desktop-приложения (по Wi-Fi/VPN,
-                                        # даём чуть больше времени на задержки сети, чем у RC)
-        self.timeout_home = 0.5         # Режим "Домой"/уклонение важнее автопилота
-        self.timeout_auto = 2.0         # Автопилот может молчать дольше
-        # ---------------------------------------
-
-        # Хранилище последних сообщений: (msg, timestamp)
-        self.last_manual = None
-        self.last_app_manual = None
-        self.last_home = None
-        self.last_auto = None
-
-        # Подписчики на разные источники
-        self.sub_manual = self.create_subscription(Twist, '/cmd_vel/manual', self.cb_manual, 10)
-        # ДОБАВЛЕНО: канал ручного управления из desktop-приложения (клавиатура/джойстик в UI),
-        # публикуется через rosbridge. Приоритет НИЖЕ физического пульта — если оператор
-        # одновременно держит в руках RC-пульт, он всегда может перехватить управление.
-        self.sub_app_manual = self.create_subscription(Twist, '/cmd_vel/app_manual', self.cb_app_manual, 10)
-        self.sub_home = self.create_subscription(Twist, '/cmd_vel/home', self.cb_home, 10)
-        self.sub_auto = self.create_subscription(Twist, '/cmd_vel/auto', self.cb_auto, 10)
-
-        # Паблишер в драйвер робота
+        self.mode = 1
+        self.mode_time = -float('inf')
+        self.commands = {}
+        self.create_subscription(Int8, '/control_mode', self.on_mode, 10)
+        for source in ('manual', 'app_manual', 'auto'):
+            self.create_subscription(
+                Twist, '/cmd_vel/' + source,
+                lambda msg, source=source: self.on_command(source, msg), 10)
         self.pub_final = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.create_timer(0.02, self.publish_logic)
 
-        # Таймер проверки (50 Гц)
-        self.timer = self.create_timer(0.02, self.publish_logic)
+    def on_mode(self, msg):
+        if msg.data != self.mode:
+            self.commands.clear()
+            self.pub_final.publish(Twist())
+        self.mode, self.mode_time = msg.data, time.monotonic()
 
-        self.get_logger().info("Cmd Mux Node started. Listening for manual, app_manual, home, auto...")
-
-    def cb_manual(self, msg):
-        self.last_manual = (msg, self.get_clock().now())
-
-    def cb_app_manual(self, msg):
-        self.last_app_manual = (msg, self.get_clock().now())
-
-    def cb_home(self, msg):
-        self.last_home = (msg, self.get_clock().now())
-
-    def cb_auto(self, msg):
-        self.last_auto = (msg, self.get_clock().now())
+    def on_command(self, source, msg):
+        values = (msg.linear.x, msg.linear.y, msg.linear.z,
+                  msg.angular.x, msg.angular.y, msg.angular.z)
+        self.commands[source] = (
+            msg if all(math.isfinite(v) for v in values) else Twist(), time.monotonic())
 
     def publish_logic(self):
-        now = self.get_clock().now()
-        final_cmd = Twist() # По умолчанию стоп (все нули)
+        now = time.monotonic()
+        source = select_source(self.mode, now - self.mode_time,
+                               {k: now - v[1] for k, v in self.commands.items()})
+        self.pub_final.publish(self.commands[source][0] if source else Twist())
 
-        # 1. ПРОВЕРКА ФИЗИЧЕСКОГО ПУЛЬТА (Высший приоритет)
-        if self.last_manual:
-            msg, time_received = self.last_manual
-            age_sec = (now - time_received).nanoseconds / 1e9
-            if age_sec < self.timeout_manual:
-                self.pub_final.publish(msg)
-                return
-
-        # 2. ПРОВЕРКА РУЧНОГО УПРАВЛЕНИЯ ИЗ ПРИЛОЖЕНИЯ (ДОБАВЛЕНО)
-        if self.last_app_manual:
-            msg, time_received = self.last_app_manual
-            age_sec = (now - time_received).nanoseconds / 1e9
-            if age_sec < self.timeout_app_manual:
-                self.pub_final.publish(msg)
-                return
-
-        # 3. ПРОВЕРКА РЕЖИМА "ДОМОЙ" (Средний приоритет)
-        if self.last_home:
-            msg, time_received = self.last_home
-            age_sec = (now - time_received).nanoseconds / 1e9
-            if age_sec < self.timeout_home:
-                self.pub_final.publish(msg)
-                return
-
-        # 4. ПРОВЕРКА АВТОПИЛОТА (Низший приоритет)
-        if self.last_auto:
-            msg, time_received = self.last_auto
-            age_sec = (now - time_received).nanoseconds / 1e9
-            if age_sec < self.timeout_auto:
-                self.pub_final.publish(msg)
-                return
-
-        # Если никто не прислал свежих данных -> Стоп
-        self.pub_final.publish(final_cmd)
 
 def main(args=None):
     rclpy.init(args=args)
     node = CmdMuxNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
-
-if __name__ == '__main__':
-    main()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.pub_final.publish(Twist())
+        node.destroy_node()
+        rclpy.shutdown()

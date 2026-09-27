@@ -274,6 +274,8 @@ class ELRSReceiverNode(Node):
         return False
     
     def check_mode_switch(self):
+        # Heartbeat for the fail-closed command mux (also after mux restart).
+        self.mode_publisher.publish(Int8(data=self.current_mode))
         if not hasattr(self, 'last_normalized_channels') or len(self.last_normalized_channels) <= 8:
             return
 

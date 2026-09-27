@@ -1,0 +1,83 @@
+"""Raw I2C_RDWR SHTP transport: no SMBus register/block-length protocol."""
+import time
+import fcntl
+from .protocol import ACCEL, GYRO, MAG, ROTATION, ProtocolError, complete_i2c_packet, decode_control_products, header, packet, set_feature
+
+
+class ShtpI2C:
+    def __init__(self, bus_number, address, gpio_chip='auto', rst_gpio=17, int_gpio=27):
+        # Lazy import lets protocol and fake-bus tests run without hardware packages.
+        from smbus2 import SMBus, i2c_msg
+        self.gpio = None
+        self.bus = SMBus(bus_number)
+        try:
+            # Cooperative exclusive bus ownership: a second copy must not reset
+            # this sensor underneath the running navigation stack.
+            fcntl.flock(self.bus.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            from .gpio import SensorGPIO
+            self.gpio = SensorGPIO(gpio_chip, rst_gpio, int_gpio)
+        except Exception:
+            self.bus.close()
+            raise
+        self.message = i2c_msg
+        self.address = address
+        self.tx_sequence = [0] * 6
+
+    def close(self):
+        try:
+            if self.gpio is not None:
+                self.gpio.close()
+                self.gpio = None
+        finally:
+            self.bus.close()
+
+    def read_bytes(self, size):
+        msg = self.message.read(self.address, size)
+        self.bus.i2c_rdwr(msg)
+        return bytes(msg)
+
+    def send(self, channel, payload):
+        data = packet(channel, self.tx_sequence[channel], payload)
+        self.bus.i2c_rdwr(self.message.write(self.address, data))
+        self.tx_sequence[channel] = (self.tx_sequence[channel] + 1) & 255
+
+    def receive(self):
+        # Level check also sees INT already LOW at startup; no lost-edge wait.
+        if not self.gpio.ready():
+            return None
+        first = self.read_bytes(4)
+        length, channel, sequence, continuation = header(first)
+        if length == 0:
+            return None
+        # Every I2C read starts with an SHTP header again. Read entire packet
+        # in one Linux I2C message; SMBus read_i2c_block_data's 32-byte limit is wrong here.
+        data = self.read_bytes(length)
+        return complete_i2c_packet(first, data)
+
+    def configure(self, rate_hz, mag_rate_hz):
+        self.gpio.reset()
+        self.tx_sequence = [0] * 6
+        self.gpio.wait_ready(2.0)
+        # Drain boot advertisements/reset notifications, never expose them as measurements.
+        deadline = time.monotonic() + 2.0
+        while self.receive() is not None:
+            if time.monotonic() >= deadline:
+                raise TimeoutError('BNO085 boot stream did not settle')
+        self.send(2, b'\xf9\x00')  # Product ID request confirms SH-2 is running.
+        deadline = time.monotonic() + 2.0
+        while True:
+            item = self.receive()
+            if item and item[0] == 2:
+                products = decode_control_products(item[2])
+                if products:
+                    product = dict(products[0])
+                    if len(products) > 1:
+                        product['components'] = products
+                    break
+            if time.monotonic() >= deadline:
+                raise TimeoutError('No SH-2 Product ID response')
+            time.sleep(0.01)
+        for sensor in (ACCEL, GYRO, ROTATION, MAG):
+            self.send(2, set_feature(sensor, mag_rate_hz if sensor == MAG else rate_hz))
+            time.sleep(0.01)
+        return product

@@ -1,0 +1,9 @@
+# Reference only: merge into the active [all] section of /boot/firmware/config.txt.
+# Do not replace the entire boot configuration; preserve existing UART overlays.
+# Check for conflicting later settings/includes. Reboot after editing.
+# Linux /dev/i2c-N does not expose clock selection via a ROS rate_hz parameter.
+[all]
+dtparam=i2c_arm=on
+dtparam=i2c_arm_baudrate=100000
+# Wiring: SDA GPIO2/pin3, SCL GPIO3/pin5, RST GPIO17/pin11, INT GPIO27/pin13.
+# Do NOT add gpio=27=op,... or run gpioset on INT: it is the SENSOR's output.

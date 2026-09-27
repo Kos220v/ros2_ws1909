@@ -7,7 +7,7 @@ ROS 2 Jazzy).
 
 Распределение UART:
     uart0  /dev/ttyAMA0  — приёмник ELRS (пульт)
-    uart1  /dev/ttyAMA1  — IMU STM32
+    I2C1  /dev/i2c-1    — BNO085 Qwiic (0x4B), GPIO2/GPIO3
     uart2  /dev/ttyAMA2  — GPS (NMEA)
     uart3  /dev/ttyAMA3  — VESC левый  (kolesa_control)
     uart4  /dev/ttyAMA4  — VESC правый (kolesa_control)
@@ -16,9 +16,8 @@ ROS 2 Jazzy).
 Запускает:
     elrs_receiver        пульт ELRS       -> /cmd_vel/manual, /control_mode
     kolesa_control       2×VESC (FS75100) <- /cmd_vel, -> /odom/vesc (скорость)
-    imu_stm32_bridge     STM32 IMU        -> /imu/data (кватернион ENU, гироскоп)
-    robot_odom           /odom/vesc + /imu/data -> /odom
-                         (путь — VESC, курс — IMU; колёсный yaw НЕ используется)
+    bno08x_imu           BNO085 I2C        -> /imu/data (кватернион ENU, гироскоп)
+    Локализация запускается отдельно: localization.launch.py (counter_odometry + GPS EKF).
     nmea_navsat_driver   GNSS             -> /gps/fix
     robot_state_publisher  URDF           -> статические TF base_link -> датчики
     cmd_switcher         приоритеты       -> /cmd_vel
@@ -29,10 +28,7 @@ ROS 2 Jazzy).
     lidar_delay   задержка старта лидара, с (мотор вибрирует, IMU должна
                   успеть откалибровать гироскоп стоя)
     use_gps       запускать драйвер GNSS (false — стенд/помещение)
-    gps_port, imu_port, lidar_port   переопределение устройств
-    odom_publish_tf   true — robot_odom сам публикует TF odom->base_link
-                      (ТОЛЬКО без robot_localization, т.е. без localization.launch.py)
-    odom_yaw_mode     absolute (ENU, нужно для GPS) | relative (ноль при старте)
+    gps_port, lidar_port, imu_i2c_bus, imu_i2c_address   переопределение устройств
 """
 
 import os
@@ -56,13 +52,11 @@ def _first_existing(*paths):
 
 def launch_setup(context, *args, **kwargs):
     project_start_share = get_package_share_directory('project_start')
-    imu_share = get_package_share_directory('imu_stm32_bridge')
-    odom_share = get_package_share_directory('robot_odom')
+    imu_share = get_package_share_directory('bno08x_imu')
 
     # ---------------------------------------------------------------- порты
     # Жёстко зафиксированные UART на Raspberry Pi 5 (см. config.txt / оверлеи)
     ELRS_PORT  = '/dev/ttyAMA0'   # uart0
-    IMU_PORT   = '/dev/ttyAMA1'   # uart1
     GPS_PORT   = '/dev/ttyAMA2'   # uart2
     VESC_LEFT  = '/dev/ttyAMA3'   # uart3
     VESC_RIGHT = '/dev/ttyAMA4'   # uart4
@@ -74,8 +68,6 @@ def launch_setup(context, *args, **kwargs):
         _first_existing(LIDAR_PORT, '/dev/ttyUSB1')
     gps_port = LaunchConfiguration('gps_port').perform(context) or \
         _first_existing(GPS_PORT)
-    imu_port = LaunchConfiguration('imu_port').perform(context) or \
-        _first_existing(IMU_PORT)
 
     use_gps = LaunchConfiguration('use_gps').perform(context).lower() in ('1', 'true', 'yes')
     lidar_delay = float(LaunchConfiguration('lidar_delay').perform(context))
@@ -83,9 +75,6 @@ def launch_setup(context, *args, **kwargs):
     if lidar_port is None:
         raise RuntimeError('Лидар не найден: нет /dev/ttyUSB0 '
                            '(задайте lidar_port:=...)')
-    if imu_port is None:
-        raise RuntimeError('IMU не найден: нет /dev/ttyAMA1 '
-                           '(задайте imu_port:=...)')
     if use_gps and gps_port is None:
         raise RuntimeError('GNSS не найден: нет /dev/ttyAMA2 '
                            '(задайте gps_port:=... или use_gps:=false)')
@@ -152,6 +141,8 @@ def launch_setup(context, *args, **kwargs):
             # Калибровка одометрии VESC (см. kolesa_control/README.md)
             'tacho_counts_per_revolution': 2157.0,
             'distance_per_revolution': 2.011,
+            'left_odometry_scale': 1.0,
+            'right_odometry_scale': 1.0,
             'odometry_scale': 1.15,   # замер: рулетка 14.12 м / одометрия 12.28 м
             'invert_left': False,
             'invert_right': True,
@@ -169,50 +160,19 @@ def launch_setup(context, *args, **kwargs):
         }],
     )
 
-    # ------------------------------------------------------- инерциальный модуль
-    imu_params = os.path.join(imu_share, 'config', 'imu_params.yaml')
+    # BNO085: обязательные RST/INT; без respawn, reset меняет состояние курса.
+    # ------------------------------------------------------- BNO085 по I2C
+    imu_params = os.path.join(imu_share, 'config', 'imu.yaml')
     imu_node = Node(
-        package='imu_stm32_bridge',
-        executable='bridge_node',
-        name='imu_stm32_bridge',
-        namespace='imu',
-        output='screen',
-        respawn=True,
-        respawn_delay=3.0,
-        parameters=[
-            imu_params,
-            {
-                'port': imu_port,        # /dev/ttyAMA1
-                'baud': 115200,
-                'frame_id': 'imu_link',
-                'rate': 50,
-                # Магнитное склонение, градусы (+ восточное). Пересчитайте для
-                # своей местности: https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml
-                'declination': ParameterValue(
-                    LaunchConfiguration('declination_deg'), value_type=float),
-                'publish_mag': True,
-            },
-        ],
-    )
-
-    # ---------------------------------------------- одометрия VESC + IMU -> /odom
-    odom_params = os.path.join(odom_share, 'config', 'odom_params.yaml')
-    odom_node = Node(
-        package='robot_odom',
-        executable='odom_node',
-        name='robot_odom',
-        output='screen',
-        respawn=True,
-        respawn_delay=2.0,
-        parameters=[odom_params, {
-            'vesc_odom_topic': '/odom/vesc',
-            'imu_topic': '/imu/data',
-            'odom_topic': '/odom',
-            'publish_tf': ParameterValue(
-                LaunchConfiguration('odom_publish_tf'), value_type=bool),
-            'yaw_mode': LaunchConfiguration('odom_yaw_mode'),
-            'yaw_offset_deg': ParameterValue(
-                LaunchConfiguration('imu_yaw_offset_deg'), value_type=float),
+        package='bno08x_imu', executable='imu_node', name='bno08x_imu',
+        namespace='imu', output='screen', respawn=False,
+        parameters=[imu_params, {
+            'gpio_chip': ParameterValue(LaunchConfiguration('imu_gpio_chip'), value_type=str),
+            'rst_gpio': ParameterValue(LaunchConfiguration('imu_rst_gpio'), value_type=int),
+            'int_gpio': ParameterValue(LaunchConfiguration('imu_int_gpio'), value_type=int),
+            'i2c_bus': ParameterValue(LaunchConfiguration('imu_i2c_bus'), value_type=int),
+            'i2c_address': ParameterValue(LaunchConfiguration('imu_i2c_address'), value_type=int),
+            'declination_deg': ParameterValue(LaunchConfiguration('declination_deg'), value_type=float),
         }],
     )
 
@@ -278,7 +238,6 @@ def launch_setup(context, *args, **kwargs):
         elrs_node,
         imu_node,
         kolesa_control_node,
-        odom_node,
         *gps_nodes,
         robot_state_publisher_node,
         cmd_mux_node,
@@ -296,18 +255,16 @@ def generate_launch_description():
         DeclareLaunchArgument('gps_port', default_value='/dev/ttyAMA2',
                               description='Порт GNSS (по умолчанию /dev/ttyAMA2)'),
         DeclareLaunchArgument('gps_baud', default_value='115200'),
-        DeclareLaunchArgument('imu_port', default_value='/dev/ttyAMA1',
-                              description='Порт IMU STM32 (по умолчанию /dev/ttyAMA1)'),
+        DeclareLaunchArgument('imu_gpio_chip', default_value='auto'),
+        DeclareLaunchArgument('imu_rst_gpio', default_value='17'),
+        DeclareLaunchArgument('imu_int_gpio', default_value='27'),
+        DeclareLaunchArgument('imu_i2c_bus', default_value='1',
+                              description='Номер шины /dev/i2c-N для BNO085'),
+        DeclareLaunchArgument('imu_i2c_address', default_value='75',
+                              description='Адрес BNO085: 75=0x4B, 74=0x4A'),
         DeclareLaunchArgument('lidar_port', default_value='/dev/ttyUSB0',
                               description='Порт лидара (USB, по умолчанию /dev/ttyUSB0)'),
-        DeclareLaunchArgument('declination_deg', default_value='11.9',
+        DeclareLaunchArgument('declination_deg', default_value='0.0',
                               description='Магнитное склонение, град (+ восточное)'),
-        DeclareLaunchArgument('imu_yaw_offset_deg', default_value='-48.0',
-                              description='Поправка угла монтажа IMU, град'),
-        DeclareLaunchArgument('odom_publish_tf', default_value='false',
-                              description='robot_odom публикует TF odom->base_link '
-                                          '(true только БЕЗ robot_localization)'),
-        DeclareLaunchArgument('odom_yaw_mode', default_value='absolute',
-                              description='absolute (ENU) | relative (ноль при старте)'),
         OpaqueFunction(function=launch_setup),
     ])

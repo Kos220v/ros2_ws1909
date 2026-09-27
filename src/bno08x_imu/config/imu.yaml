@@ -1,0 +1,19 @@
+/**/bno08x_imu:
+  ros__parameters:
+    i2c_bus: 1
+    i2c_address: 75                  # Confirm against the working Arduino sketch: 75=0x4B or 74=0x4A
+    gpio_chip: auto                  # discover pinctrl-rp1, never assume gpiochip4
+    rst_gpio: 17                     # BCM17 / physical pin 11; output, idle HIGH
+    int_gpio: 27                     # BCM27 / physical pin 13; input, ready LOW
+    frame_id: imu_link
+    rate_hz: 25.0                    # accel, calibrated gyro, magnetic Rotation Vector
+    mag_rate_hz: 10.0
+    declination_deg: 0.0             # MEASURE: degrees east-positive; applied ONLY here
+    sample_max_age: 0.10             # each of accel/gyro/quaternion must be fresh
+    reconnect_timeout: 2.0           # no essential reports -> latched fault; manual stack restart
+    min_accuracy: 2                  # SH-2: 0 unreliable, 1 low, 2 medium, 3 high
+    max_heading_error: 0.35          # rad; reject poorer Rotation Vector estimates
+    orientation_stddev: 0.05         # rad; floor, enlarged by reported heading error
+    angular_velocity_stddev: 0.02    # rad/s; tune by measurement
+    linear_acceleration_stddev: 0.15 # m/s²; includes gravity (not LINEAR_ACCELERATION)
+    magnetic_stddev: 0.000002        # tesla

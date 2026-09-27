@@ -12,8 +12,8 @@
 Телеметрия (словарь, возвращаемый get_telemetry()):
 
     rpm               — eRPM из VESC (электрические обороты в минуту)
-    tachometer         — знаковый int32, считает электрические обороты
-    tachometer_abs     — беззнаковый по смыслу int32
+    tachometer         — знаковый int32, коммутационные тики
+    tachometer_abs     — int32 на проводе, монотонный по смыслу счётчик пробега
     tacho_abs          — alias для tachometer_abs (обратная совместимость)
     erpm               — alias для rpm
     _rx_time           — time.monotonic() момента приёма пакета
@@ -226,7 +226,9 @@ class VescDriver:
 
             # Читаем данные из порта.
             try:
-                data = self._ser.read(256)
+                # Do not wait for 256 bytes / 100 ms before timestamping a
+                # small telemetry frame: that batches replies and distorts dv/dt.
+                data = self._ser.read(max(1, min(self._ser.in_waiting, 4096)))
             except Exception as e:
                 self._log_warn(f"[{self.name}] ошибка чтения: {e}")
                 self._close()
