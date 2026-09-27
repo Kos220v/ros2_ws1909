@@ -57,11 +57,12 @@ def adapter():
         for side in ('left','right'):
             node.model.push_track(side,t,ticks,.001,'s')
         node.model.push_imu(t,0,.0025,0,.0004)
+    node.startup_dropped, node.last_input_age = {}, {}
     node.received = {key: (1.1,1.1) for key in ('left','right','imu')}
     node.pub, node.tf_pub, node.health_pub = Publisher(), Publisher(), Publisher()
     node.fault, node.last_result, node.last_published = '', None, -float('inf')
     node.get_clock = lambda: NS(now=lambda: FakeTime(round(now[0]*1e9)))
-    node.get_logger = lambda: NS(error=lambda _: None)
+    node.get_logger = lambda: NS(error=lambda _: None, warning=lambda _: None)
     return node, now
 
 
@@ -107,3 +108,75 @@ def test_invalid_track_after_start_is_not_zero_movement():
     assert not node.health_pub.messages[-1].data
     node.tick()
     assert len(node.pub.messages) == 1
+
+
+def track(stamp, ticks=100):
+    return NS(valid=True, header=NS(frame_id='base_link',
+              stamp=NS(nanoseconds=round(stamp*1e9))), position_ticks=ticks,
+              meters_per_tick=.001, session_id='s')
+
+
+def test_stale_startup_queue_is_discarded_not_integrated():
+    node, now = adapter()
+    before = list(node.model.left.times)
+    node.on_track('left', track(now[0]-.348))
+    assert not node.fault
+    assert node.startup_dropped == {'left': 1}
+    assert 'left' not in node.received
+    assert node.model.left.times == before
+    node.tick()
+    assert node.model.time is None
+    assert not node.pub.messages and not node.tf_pub.messages
+    assert not node.health_pub.messages[-1].data
+    node.on_track('left', track(1.11, 100))
+    node.tick()
+    assert node.health_pub.messages[-1].data
+    assert node.pub.messages[-1].header.stamp.nanoseconds == 1_100_000_000
+
+
+def test_buffered_stale_inputs_cannot_initialize_odometry():
+    node, now = adapter()
+    now[0] = 2.0
+    node.tick()
+    assert not node.fault and node.model.time is None
+    assert not node.pub.messages and not node.tf_pub.messages
+    assert not node.health_pub.messages[-1].data
+
+
+def test_same_348ms_delay_after_initialization_is_latched():
+    node, now = adapter()
+    node.tick()
+    node.on_track('left', track(now[0]-.348))
+    assert 'state=active' in node.fault
+    assert 'age=0.348000s' in node.fault
+    node.on_track('left', track(1.12))
+    node.tick()
+    assert len(node.pub.messages) == len(node.tf_pub.messages) == 1
+    assert not node.health_pub.messages[-1].data
+
+
+def test_future_and_zero_stamp_are_not_ignored_at_startup():
+    for stamp in (0., 2.):
+        node, now = adapter()
+        node.on_track('left', track(stamp))
+        assert 'invalid/future timestamp' in node.fault
+        assert not node.startup_dropped
+        assert not node.health_pub.messages[-1].data
+
+
+def test_stale_imu_at_startup_returns_before_tf_and_covariance_access():
+    node, now = adapter()
+    node.p['imu_time_offset'] = 0.
+    node.on_imu(NS(header=NS(stamp=NS(nanoseconds=700_000_000))))
+    assert node.startup_dropped == {'imu': 1}
+    assert not node.fault and 'imu' not in node.received
+    node.tick()
+    assert not node.pub.messages
+
+
+def test_invalid_startup_track_revokes_buffered_readiness():
+    node, _ = adapter()
+    node.on_track('left', NS(valid=False))
+    node.tick()
+    assert not node.fault and node.model.time is None
+    assert not node.health_pub.messages[-1].data

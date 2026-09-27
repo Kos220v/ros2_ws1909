@@ -49,6 +49,8 @@ class CounterOdometryNode(Node):
             if not math.isfinite(self.p[name]) or abs(self.p[name]) > 0.1:
                 raise ValueError(name + ' must be finite and within +/-0.1 seconds')
         self.received = {}
+        self.startup_dropped = {}
+        self.last_input_age = {}
         self.fault = ''
         self.last_result = None
         self.last_published = -float('inf')
@@ -75,8 +77,24 @@ class CounterOdometryNode(Node):
     def check_stamp(self, msg, stream):
         stamp = Time.from_msg(msg.header.stamp).nanoseconds/1e9 + self.p[stream+'_time_offset']
         now = self.get_clock().now().nanoseconds/1e9
-        if stamp <= 0 or not -0.02 <= now-stamp <= self.p['input_timeout']:
-            raise OdometryError('stale/future timestamp: '+stream)
+        age = now-stamp
+        self.last_input_age[stream] = age
+        if not math.isfinite(stamp) or stamp <= 0 or age < -0.02:
+            raise OdometryError(f'invalid/future timestamp: {stream}; age={age:.6f}s')
+        if age > self.p['input_timeout']:
+            if self.model.time is None:
+                # A newly matched reliable subscriber may drain old samples.
+                # Never feed them to the model or refresh any health heartbeat.
+                self.received.pop(stream, None)
+                self.startup_dropped[stream] = self.startup_dropped.get(stream, 0) + 1
+                if self.startup_dropped[stream] == 1:
+                    self.get_logger().warning(
+                        f'discarding stale startup sample: {stream}; age={age:.6f}s; '
+                        'waiting for fresh synchronized inputs at standstill')
+                return None
+            raise OdometryError(
+                f'stale timestamp: {stream}; age={age:.6f}s; '
+                f'limit={self.p["input_timeout"]:.3f}s; state=active')
         return stamp
 
     def on_track(self, side, msg):
@@ -86,10 +104,14 @@ class CounterOdometryNode(Node):
             if not msg.valid:
                 if self.model.time is not None:
                     self.fail(side + ' VESC sample invalid')
+                else:
+                    self.received.pop(side, None)
                 return
             if msg.header.frame_id != self.p['base_frame']:
                 raise OdometryError('track base frame mismatch')
             stamp = self.check_stamp(msg, side)
+            if stamp is None:
+                return
             if self.model.push_track(side, stamp, msg.position_ticks, msg.meters_per_tick, msg.session_id):
                 self.received[side] = (stamp, time.monotonic())
         except OdometryError as error:
@@ -100,6 +122,8 @@ class CounterOdometryNode(Node):
             return
         try:
             stamp = self.check_stamp(msg, 'imu')
+            if stamp is None:
+                return
             if msg.orientation_covariance[0] < 0 or msg.angular_velocity_covariance[0] < 0:
                 raise OdometryError('IMU lacks orientation or gyro')
             if not msg.header.frame_id:
@@ -129,6 +153,8 @@ class CounterOdometryNode(Node):
         except TransformException:
             if self.model.time is not None:
                 self.fail('IMU mounting TF unavailable')
+            else:
+                self.received.pop('imu', None)
         except OdometryError as error:
             self.fail(str(error))
 
@@ -136,13 +162,17 @@ class CounterOdometryNode(Node):
         now = time.monotonic()
         ros_now = self.get_clock().now().nanoseconds/1e9
         if not self.fault:
-            if self.model.time is not None:
-                for stream in ('left', 'right', 'imu'):
-                    stamp, receipt = self.received.get(stream, (0, -float('inf')))
-                    if (not 0 <= now-receipt <= self.p['input_timeout']
-                            or not -0.02 <= ros_now-stamp <= self.p['input_timeout']):
-                        self.fail('missing/stale '+stream)
-                        break
+            for stream in ('left', 'right', 'imu'):
+                stamp, receipt = self.received.get(stream, (0, -float('inf')))
+                if (not 0 <= now-receipt <= self.p['input_timeout']
+                        or not -0.02 <= ros_now-stamp <= self.p['input_timeout']):
+                    if self.model.time is None:
+                        # Do not let advance() initialize from stale buffered data.
+                        self.health_pub.publish(Bool(data=False))
+                        return
+                    self.fail(f'missing/stale {stream}; age={ros_now-stamp:.6f}s; '
+                              f'receipt_age={now-receipt:.6f}s; state=active')
+                    break
             if not self.fault:
                 try:
                     result = self.model.advance()
@@ -188,8 +218,14 @@ class CounterOdometryNode(Node):
             DiagnosticStatus.OK if self.last_result else DiagnosticStatus.WARN)
         status.message = self.fault or ('synchronized counters + heading' if self.last_result
                                        else 'waiting for common time interval / IMU mounting TF')
+        status.values = [KeyValue(key='state', value=(
+            'fault' if self.fault else 'active' if self.model.time is not None else 'waiting'))]
+        status.values.extend(KeyValue(key='startup_dropped_' + k, value=str(v))
+                             for k, v in self.startup_dropped.items())
+        status.values.extend(KeyValue(key='last_input_age_' + k + '_s', value=str(v))
+                             for k, v in self.last_input_age.items())
         if self.last_result:
-            status.values = [KeyValue(key='track_vs_imu_residual_m', value=str(self.last_result.slip_residual)),
+            status.values += [KeyValue(key='track_vs_imu_residual_m', value=str(self.last_result.slip_residual)),
                              KeyValue(key='stamp', value=str(self.last_result.stamp))]
         array = DiagnosticArray()
         array.header.stamp = self.get_clock().now().to_msg()
