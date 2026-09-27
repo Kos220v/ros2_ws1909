@@ -103,3 +103,46 @@ def decode_product_id(payload):
     _, cause, major, minor, part, build, patch, _ = struct.unpack('<BBBBIIHH', payload)
     return dict(reset_cause=cause, version=f'{major}.{minor}.{patch}',
                 software_part=part, software_build=build)
+
+
+def complete_i2c_packet(first, data):
+    """Validate a header-only probe followed by the remaining full I2C cargo.
+
+    BNO085 can consume the probe as a header-only transfer: the next header has
+    continuation=1 and sequence+1, with unchanged cargo length and channel. No
+    payload was consumed by the 4-byte probe. Also accept exact header replay.
+    This is NOT arbitrary multi-fragment payload reassembly.
+    """
+    length, channel, sequence, continuation = header(first)
+    if not length or continuation:
+        raise ProtocolError('Unexpected empty/orphan continuation probe')
+    if len(data) != length:
+        raise ProtocolError(f'Short I2C read: expected {length}, got {len(data)}')
+    second_length, second_channel, second_seq, second_cont = header(data[:4])
+    if (second_length, second_channel) != (length, channel):
+        raise ProtocolError('SHTP length/channel changed after header probe')
+    replay = data[:4] == first
+    header_only_continuation = second_cont and second_seq == (sequence + 1) % 256
+    if not (replay or header_only_continuation):
+        raise ProtocolError('SHTP sequence/continuation mismatch after header probe')
+    return second_channel, second_seq, data[4:]
+
+
+def decode_control_products(payload):
+    """Parse bundled SH-2 control reports at report boundaries, never scan for F8.
+
+    Supported incoming reports: F1 command response (16), F8 Product ID (16),
+    FC Get Feature response (17). Fail closed on unknown/truncated reports.
+    """
+    sizes = {0xF1: 16, 0xF8: 16, 0xFC: 17}
+    products = []
+    offset = 0
+    while offset < len(payload):
+        report_id = payload[offset]
+        size = sizes.get(report_id)
+        if size is None or offset + size > len(payload):
+            raise ProtocolError(f'Unknown/truncated SH-2 control report 0x{report_id:02x} at {offset}')
+        if report_id == 0xF8:
+            products.append(decode_product_id(payload[offset:offset + size]))
+        offset += size
+    return products

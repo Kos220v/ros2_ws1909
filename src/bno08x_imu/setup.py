@@ -2,7 +2,7 @@ from glob import glob
 from setuptools import setup
 
 setup(
-    name='bno08x_imu', version='0.2.0', packages=['bno08x_imu'],
+    name='bno08x_imu', version='0.2.1', packages=['bno08x_imu'],
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/bno08x_imu']),
         ('share/bno08x_imu', ['package.xml', 'README.md']),

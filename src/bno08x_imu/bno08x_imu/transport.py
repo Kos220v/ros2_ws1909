@@ -1,7 +1,7 @@
 """Raw I2C_RDWR SHTP transport: no SMBus register/block-length protocol."""
 import time
 import fcntl
-from .protocol import ACCEL, GYRO, MAG, ROTATION, ProtocolError, decode_product_id, header, packet, set_feature
+from .protocol import ACCEL, GYRO, MAG, ROTATION, ProtocolError, complete_i2c_packet, decode_control_products, header, packet, set_feature
 
 
 class ShtpI2C:
@@ -52,11 +52,7 @@ class ShtpI2C:
         # Every I2C read starts with an SHTP header again. Read entire packet
         # in one Linux I2C message; SMBus read_i2c_block_data's 32-byte limit is wrong here.
         data = self.read_bytes(length)
-        if len(data) != length or data[:4] != first:
-            raise ProtocolError('SHTP header changed or short I2C read')
-        if continuation:
-            raise ProtocolError('Fragmented SHTP cargo is not supported')
-        return channel, sequence, data[4:]
+        return complete_i2c_packet(first, data)
 
     def configure(self, rate_hz, mag_rate_hz):
         self.gpio.reset()
@@ -71,9 +67,13 @@ class ShtpI2C:
         deadline = time.monotonic() + 2.0
         while True:
             item = self.receive()
-            if item and item[0] == 2 and item[2][:1] == b'\xf8':
-                product = decode_product_id(item[2])
-                break
+            if item and item[0] == 2:
+                products = decode_control_products(item[2])
+                if products:
+                    product = dict(products[0])
+                    if len(products) > 1:
+                        product['components'] = products
+                    break
             if time.monotonic() >= deadline:
                 raise TimeoutError('No SH-2 Product ID response')
             time.sleep(0.01)

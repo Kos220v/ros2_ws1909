@@ -7,7 +7,7 @@ import argparse
 import json
 import time
 
-from .protocol import ProtocolError, decode_product_id, header
+from .protocol import ProtocolError, complete_i2c_packet, decode_control_products, header
 from .transport import ShtpI2C
 
 
@@ -71,9 +71,7 @@ class Diagnostic:
         data = self.t.read_bytes(length)
         self.emit(f'RX {len(data)} bytes: {data[:96].hex(" ")}' +
                   (' ... (hex truncated)' if len(data) > 96 else ''))
-        if len(data) != length or data[:4] != first:
-            raise ProtocolError('Short packet or repeated SHTP header mismatch')
-        return channel, seq, data[4:]
+        return complete_i2c_packet(first, data)
 
     def attempt(self, address):
         self.t.address = address
@@ -126,10 +124,18 @@ class Diagnostic:
             if item is None:
                 continue
             channel, sequence, payload = item
-            if channel == 2 and len(payload) == 16 and payload[0] == 0xF8:
-                result['product_id'] = decode_product_id(payload)
-                self.emit('VALID SH-2 Product ID: ' + json.dumps(result['product_id']))
-                break
+            if channel == 2:
+                try:
+                    products = decode_control_products(payload)
+                except ProtocolError as error:
+                    result['errors'].append(str(error))
+                    self.emit(str(error))
+                    continue
+                if products:
+                    result['product_id'] = products[0]
+                    result['product_ids'] = products
+                    self.emit('VALID SH-2 Product IDs: ' + json.dumps(products))
+                    break
         if result['product_id'] is None:
             self.emit('No valid SH-2 Product ID response; this does not prove a defective board')
         result['int_low'] = self.seen_low
